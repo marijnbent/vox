@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Existing Entitlements -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Required Entitlements -->
+    <key>com.apple.security.device.microphone</key> <!-- For Microphone Access -->
+    <true/>
+    <key>com.apple.security.device.screen-capture</key> <!-- For Screen Recording Access -->
+    <true/>
+    <key>com.apple.security.personal-information.accessibility</key> <!-- For Accessibility Access -->
+    <true/>
+
+    <!-- Clipboard access does not require a specific entitlement key -->
+
+  </dict>
+</plist>

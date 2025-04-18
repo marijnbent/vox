@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "deepgram-js-sdk Docs": {
+      "url": "https://gitmcp.io/deepgram/deepgram-js-sdk",
+      "disabled": false,
+      "autoApprove": []
+    },
+    "electron Docs": {
+      "url": "https://gitmcp.io/electron/electron",
+      "disabled": false,
+      "autoApprove": []
+    },
+    "svelte Docs": {
+      "disabled": false,
+      "autoApprove": [],
+      "url": "https://gitmcp.io/sveltejs/svelte"
+    },
+    "daisyui Docs": {
+      "disabled": false,
+      "autoApprove": [],
+      "url": "https://gitmcp.io/saadeghi/daisyui"
+    }
+  }
+}

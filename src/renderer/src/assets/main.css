@@ -1,0 +1,25 @@
+@import 'remixicon/fonts/remixicon.css';
+
+/* Disable text selection globally for a more native app feel */
+body, html {
+  -webkit-user-select: none; /* Safari */
+  -ms-user-select: none; /* IE 10 and IE 11 */
+  user-select: none; /* Standard syntax */
+}
+
+/* Allow text selection in input fields and textareas */
+input,
+textarea {
+  -webkit-user-select: text; /* Safari */
+  -ms-user-select: text; /* IE 10 and IE 11 */
+  user-select: text; /* Standard syntax */
+}
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: caramellatte --default;
+}
+
+:root[data-theme="caramellatte"] {
+  background-color: transparent;
+}

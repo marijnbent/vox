@@ -1,0 +1,44 @@
+appId: com.electron.app
+productName: vox-test
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - resources/**
+win:
+  executableName: vox-test
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSMicrophoneUsageDescription: This app requires microphone access to capture audio for transcription.
+    - NSScreenCaptureUsageDescription: This app requires screen capture access for potential future contextual transcription features. # For Screen Recording
+    - NSAccessibilityUsageDescription: This app requires Accessibility access to enable global keyboard shortcuts. # For Accessibility
+    # - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder. # Keep if needed
+    # - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder. # Keep if needed
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+    - snap
+    - deb
+  maintainer: electronjs.org
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+publish:
+  provider: generic
+  url: https://example.com/auto-updates
