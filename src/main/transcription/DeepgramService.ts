@@ -49,15 +49,18 @@ export class DeepgramService implements TranscriptionService {
 
     try {
       logger.info(`Sending audio buffer to Deepgram API for transcription... (MIME type: ${mimeType}, Buffer size: ${audioBuffer.length} bytes)`);
-      const modelName = store.get('transcription.deepgramModel', 'nova-2');
+      const modelName = store.get('transcription.deepgramModel', 'nova-3');
       logger.info(`Using Deepgram transcription model: ${modelName}`);
       const options: Record<string, any> = {
         model: modelName,
+        detect_language: true,
         smart_format: true
       };
+
       if (language) {
         options.language = language;
       }
+
       logger.info(`Audio format: ${mimeType}, sending ${audioBuffer.byteLength} bytes to Deepgram`);
       const { result, error } = await this.client.listen.prerecorded.transcribeFile(
         audioBuffer,
