@@ -45,6 +45,11 @@ declare global {
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
       getDefaultPromptContent: () => Promise<string>;
+      getLogFilePath: () => Promise<string>;
+      getLogLines: (lineCount?: number) => Promise<string[]>;
+      subscribeLogUpdates: () => Promise<void>;
+      unsubscribeLogUpdates: () => Promise<void>;
+      onLogUpdate: (callback: (line: string) => void) => (() => void);
     }
   }
 }

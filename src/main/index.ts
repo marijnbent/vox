@@ -1,9 +1,9 @@
-import { app, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import store from './store';
-import { logger, setupRendererLogger } from './logger';
+import { logger, setupRendererLogger, setLogCallback } from './logger';
 import { TranscriptionManager } from './transcription/TranscriptionManager';
 import { EnhancementManager } from './enhancement/EnhancementManager';
 import * as WindowManager from './modules/windowManager';
@@ -87,6 +87,10 @@ app.whenReady().then(async () => {
     });
 
     IpcHandlers.setupIpcHandlers();
+
+    setLogCallback(IpcHandlers.sendLogLineToRenderer);
+    logger.info('Log callback set for IPC communication.');
+
 
     WindowManager.createMainWindow();
     WindowManager.createWidgetWindow();

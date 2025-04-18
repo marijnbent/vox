@@ -10,7 +10,8 @@
     { id: 'enhancements', label: 'Enhancements', icon: 'sparkling' },
     { id: 'dictionary', label: 'Dictionary', icon: 'book' },
     { id: 'permissions', label: 'Permissions', icon: 'shield-check' },
-    { id: 'history', label: 'History', icon: 'time' }
+    { id: 'history', label: 'History', icon: 'time' },
+    { id: 'logs', label: 'Logs', icon: 'file-warning' },
   ];
 </script>
 

@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import AppLayout from './components/layout/AppLayout.svelte';
-  import Dashboard from './components/settings/Dashboard.svelte';
-  import Dictionary from './components/settings/Dictionary.svelte';
-  import History from './components/settings/History.svelte';
-  import Enhancements from './components/settings/Enhancements.svelte';
-  import Permissions from './components/settings/Permissions.svelte';
-  import Shortcuts from './components/settings/Shortcuts.svelte';
-  import Transcription from './components/settings/Transcription.svelte';
-  import { initializeAudioRecorder } from './lib/audioRecorder';
+  import { onMount, onDestroy } from "svelte";
+  import AppLayout from "./components/layout/AppLayout.svelte";
+  import Dashboard from "./components/settings/Dashboard.svelte";
+  import Logs from "./components/settings/Logs.svelte";
+  import Dictionary from "./components/settings/Dictionary.svelte";
+  import History from "./components/settings/History.svelte";
+  import Enhancements from "./components/settings/Enhancements.svelte";
+  import Permissions from "./components/settings/Permissions.svelte";
+  import Shortcuts from "./components/settings/Shortcuts.svelte";
+  import Transcription from "./components/settings/Transcription.svelte";
+  import { initializeAudioRecorder } from "./lib/audioRecorder";
 
-  let activePage = 'dashboard';
+  let activePage = "dashboard";
 
   let cleanupAudioRecorder: (() => void) | null = null;
 
@@ -26,19 +27,21 @@
 </script>
 
 <AppLayout bind:activePage>
-  {#if activePage === 'dashboard'}
+  {#if activePage === "dashboard"}
     <Dashboard />
-  {:else if activePage === 'shortcuts'}
+  {:else if activePage === "shortcuts"}
     <Shortcuts />
-  {:else if activePage === 'transcription'}
+  {:else if activePage === "transcription"}
     <Transcription />
-  {:else if activePage === 'enhancements'}
+  {:else if activePage === "enhancements"}
     <Enhancements />
-  {:else if activePage === 'dictionary'}
+  {:else if activePage === "dictionary"}
     <Dictionary />
-  {:else if activePage === 'permissions'}
+  {:else if activePage === "permissions"}
     <Permissions />
-  {:else if activePage === 'history'}
+  {:else if activePage === "history"}
     <History />
+  {:else if activePage === "logs"}
+    <Logs />
   {/if}
 </AppLayout>

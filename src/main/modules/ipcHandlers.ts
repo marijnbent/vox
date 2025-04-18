@@ -1,6 +1,8 @@
 import Mustache from 'mustache';
 import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron';
 import { exec } from 'child_process';
+import fs from 'fs/promises';
+import log from 'electron-log';
 import store from '../store';
 import { logger } from '../logger';
 import { TranscriptionManager } from '../transcription/TranscriptionManager';
@@ -10,6 +12,17 @@ import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
+
+let isLogSubscriberActive = false;
+
+export function sendLogLineToRenderer(line: string): void {
+    if (isLogSubscriberActive) {
+        const mainWindow = getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('log-update', line);
+        }
+    }
+}
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
@@ -105,6 +118,43 @@ export function setupIpcHandlers(): void {
       return getDefaultPromptTemplate();
     });
 
+    ipcMain.handle('getLogFilePath', () => {
+        try {
+            const logPath = log.transports.file.getFile().path;
+            logger.info(`IPC: Providing log file path: ${logPath}`);
+            return logPath;
+        } catch (error) {
+            logger.error('IPC: Error getting log file path:', error);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('getLogLines', async (_, lineCount: number = 500) => {
+        logger.info(`IPC: Received request for last ${lineCount} log lines.`);
+        try {
+            const logPath = log.transports.file.getFile().path;
+            const data = await fs.readFile(logPath, 'utf-8');
+            const lines = data.split('\n');
+            const lastLines = lines.slice(Math.max(lines.length - lineCount, 0));
+            logger.debug(`IPC: Returning ${lastLines.length} log lines.`);
+            return lastLines;
+        } catch (error) {
+            logger.error(`IPC: Error reading log file for getLogLines:`, error);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('subscribeLogUpdates', () => {
+        logger.info('IPC: Renderer subscribed to live log updates.');
+        isLogSubscriberActive = true;
+    });
+
+    ipcMain.handle('unsubscribeLogUpdates', () => {
+        logger.info('IPC: Renderer unsubscribed from live log updates.');
+        isLogSubscriberActive = false;
+    });
+
+
     logger.info('IPC Handlers setup complete.');
 }
 
@@ -127,6 +177,7 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
     _sendRecordingStatus('processing');
 
     let originalTranscriptionText = '';
+
     let finalText = '';
     let enhancementAttempted = false;
     let finalPromptRendered: string | null = null;
@@ -330,10 +381,13 @@ function handleOpenSettingsURL(_, url: string) {
 
 function handleProcessingCancelledSilence() {
     logger.info('IPC: Received notification that processing was cancelled due to silence.');
+
     _sendRecordingStatus('idle');
+
 }
 
 let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
 export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
     mainProcessRecordingStatus = status;
 }
+
