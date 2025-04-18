@@ -13,16 +13,7 @@ import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 
-let isLogSubscriberActive = false;
 
-export function sendLogLineToRenderer(line: string): void {
-    if (isLogSubscriberActive) {
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('log-update', line);
-        }
-    }
-}
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
@@ -143,17 +134,6 @@ export function setupIpcHandlers(): void {
             throw error;
         }
     });
-
-    ipcMain.handle('subscribeLogUpdates', () => {
-        logger.info('IPC: Renderer subscribed to live log updates.');
-        isLogSubscriberActive = true;
-    });
-
-    ipcMain.handle('unsubscribeLogUpdates', () => {
-        logger.info('IPC: Renderer unsubscribed from live log updates.');
-        isLogSubscriberActive = false;
-    });
-
 
     logger.info('IPC Handlers setup complete.');
 }

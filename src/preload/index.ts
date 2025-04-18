@@ -81,15 +81,6 @@ const api = {
   getDefaultPromptContent: (): Promise<string> => ipcRenderer.invoke('getDefaultPromptContent'),
   getLogFilePath: (): Promise<string> => ipcRenderer.invoke('getLogFilePath'),
   getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
-  subscribeLogUpdates: (): Promise<void> => ipcRenderer.invoke('subscribeLogUpdates'),
-  unsubscribeLogUpdates: (): Promise<void> => ipcRenderer.invoke('unsubscribeLogUpdates'),
-  onLogUpdate: (callback: (line: string) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, line: string): void => callback(line);
-    ipcRenderer.on('log-update', handler);
-    return (): void => {
-      ipcRenderer.removeListener('log-update', handler);
-    };
-  },
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
 };
 

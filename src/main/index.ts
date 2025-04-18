@@ -88,7 +88,6 @@ app.whenReady().then(async () => {
 
     IpcHandlers.setupIpcHandlers();
 
-    setLogCallback(IpcHandlers.sendLogLineToRenderer);
     logger.info('Log callback set for IPC communication.');
 
 

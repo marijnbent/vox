@@ -4,10 +4,9 @@
 
   const logLines = writable<string[]>([]);
   const isLoading = writable(true);
-  const isLiveUpdating = writable(false);
   const maxLines = writable(500);
-
-  let unsubscribeLogs: (() => void) | null = null;
+  const copied = writable(false);
+  let copyTimeout: ReturnType<typeof setTimeout>;
 
   onMount(async () => {
     isLoading.set(true);
@@ -24,33 +23,8 @@
   });
 
   onDestroy(() => {
-    if (unsubscribeLogs) {
-      unsubscribeLogs();
-      unsubscribeLogs = null;
-      window.api.log('info', 'Unsubscribed from live log updates.');
-      window.api.unsubscribeLogUpdates();
-    }
+    clearTimeout(copyTimeout); // Clear timeout on component destroy
   });
-
-  function toggleLiveUpdates() {
-    const currentlyLive = get(isLiveUpdating);
-    isLiveUpdating.set(!currentlyLive);
-
-    if (!currentlyLive) {
-      window.api.log('info', 'Subscribing to live log updates...');
-      unsubscribeLogs = window.api.onLogUpdate((newLine) => {
-        logLines.update(lines => [...lines, newLine].slice(-get(maxLines)));
-      });
-      window.api.subscribeLogUpdates();
-    } else {
-      if (unsubscribeLogs) {
-        unsubscribeLogs();
-        unsubscribeLogs = null;
-        window.api.log('info', 'Unsubscribed from live log updates.');
-        window.api.unsubscribeLogUpdates();
-      }
-    }
-  }
 
   async function refreshLogs() {
      isLoading.set(true);
@@ -66,17 +40,30 @@
      }
   }
 
+  async function copyLogs() {
+    try {
+      const logsText = get(logLines).join('\n');
+      await navigator.clipboard.writeText(logsText);
+      copied.set(true);
+      window.api.log('info', 'Copied logs to clipboard.');
+      clearTimeout(copyTimeout);
+      copyTimeout = setTimeout(() => copied.set(false), 2000);
+    } catch (error) {
+      window.api.log('error', 'Failed to copy logs to clipboard:', error);
+    }
+  }
+
 </script>
 
 <div class="p-4 space-y-4">
   <h2 class="text-xl font-semibold">Application Logs</h2>
 
   <div class="flex items-center space-x-4">
-     <button class="btn btn-sm" class:btn-primary={$isLiveUpdating} on:click={toggleLiveUpdates}>
-       {#if $isLiveUpdating} Stop Live Updates {:else} Start Live Updates {/if}
-     </button>
-     <button class="btn btn-sm btn-secondary" on:click={refreshLogs} disabled={$isLoading || $isLiveUpdating}>
+     <button class="btn btn-sm btn-secondary" on:click={refreshLogs} disabled={$isLoading}>
         Refresh
+     </button>
+     <button class="btn btn-sm" on:click={copyLogs} disabled={$isLoading || $logLines.length === 0}>
+        {#if $copied} Copied! {:else} Copy {/if}
      </button>
   </div>
 
