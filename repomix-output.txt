@@ -621,7 +621,7 @@ export class OpenaiEnhancementService implements EnhancementService {
 File: src/main/modules/ipcHandlers.ts
 ================
 import Mustache from 'mustache';
-import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron';
+import { ipcMain, systemPreferences, shell, clipboard } from 'electron';
 import { exec } from 'child_process';
 import store from '../store';
 import { logger } from '../logger';
@@ -633,28 +633,34 @@ import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 import { LocalWhisperService, AVAILABLE_LOCAL_MODELS } from '../transcription/LocalWhisperService';
+import { statusEmitter } from '../index'; // Import the emitter
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
+let currentAppStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle'; // Local status variable
 
 export function initializeIpcHandlers(dependencies: {
     transcriptionManager: TranscriptionManager;
     enhancementManager: EnhancementManager;
     getProcessingCancelledFlag: () => boolean;
     setProcessingCancelledFlag: (value: boolean) => void;
-    sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void;
 }): void {
     transcriptionManager = dependencies.transcriptionManager;
     enhancementManager = dependencies.enhancementManager;
     _getProcessingCancelledFlag = dependencies.getProcessingCancelledFlag;
     _setProcessingCancelledFlag = dependencies.setProcessingCancelledFlag;
-    _sendRecordingStatus = dependencies.sendRecordingStatus;
-    logger.info('IPC Handlers initialized with dependencies.');
+
+    // Subscribe to status updates
+    statusEmitter.on('status-update', (status: typeof currentAppStatus) => {
+        logger.debug(`IpcHandlers received status update via emitter: ${status}`);
+        currentAppStatus = status;
+    });
+
+    logger.info('IPC Handlers initialized and subscribed to status updates.');
 }
 
 let _getProcessingCancelledFlag: () => boolean = () => false;
 let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
-let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 
 export function setupIpcHandlers(): void {
     logger.info('Setting up IPC Handlers...');
@@ -757,17 +763,14 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
 
     if (!transcriptionManager) {
         logger.error('IPC: Cannot transcribe audio, TranscriptionManager not initialized.');
-        _sendRecordingStatus('error');
         throw new Error('TranscriptionManager not initialized.');
     }
     if (!mainWindow) {
         logger.error('IPC: Cannot transcribe audio, mainWindow is not available.');
-        _sendRecordingStatus('error');
         throw new Error('Main window not available.');
     }
 
     logger.info(`IPC: Received audio data (${audio.audioData.byteLength} bytes, type: ${audio.mimeType}) for transcription.`);
-    _sendRecordingStatus('processing');
 
     let originalTranscriptionText = '';
     let finalText = '';
@@ -871,7 +874,6 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
         }
 
         sendToMain('transcription-result', finalText);
-        _sendRecordingStatus('idle');
 
         if (store.get('settings.autoPaste', true) && !_getProcessingCancelledFlag()) {
            logger.info('Auto-paste enabled, writing to clipboard and simulating paste...');
@@ -903,15 +905,11 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
     } catch (error: unknown) {
         if (_getProcessingCancelledFlag()) {
             logger.info('Processing cancelled by Escape during error handling.');
-            if (mainProcessRecordingStatus !== 'idle') {
-                _sendRecordingStatus('idle');
-            }
             return;
         }
         const message = error instanceof Error ? error.message : String(error);
         logger.error('IPC: Transcription failed:', message);
         sendToMain('transcription-error', message);
-        _sendRecordingStatus('error');
         throw error;
     }
 }
@@ -973,12 +971,6 @@ function handleOpenSettingsURL(_, url: string) {
 
 function handleProcessingCancelledSilence() {
     logger.info('IPC: Received notification that processing was cancelled due to silence.');
-    _sendRecordingStatus('idle');
-}
-
-let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
-export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
-    mainProcessRecordingStatus = status;
 }
 
 ================
@@ -988,6 +980,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { app } from 'electron';
 import path from 'path';
 import { logger } from '../logger';
+import { statusEmitter } from '../index'; // Import the emitter
 
 export enum ShortcutState {
     IDLE,
@@ -1008,28 +1001,34 @@ let ignoreNextUpInToggle = false;
 const HOLD_DURATION_THRESHOLD = 500;
 const DOUBLE_CLICK_WINDOW = 500;
 
-let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 let _sendRawShortcutAction: (action: string, keyName: string) => void = () => {};
 let _startRecording: () => void = () => {};
 let _stopRecording: () => void = () => {};
 let _cancelRecording: () => void = () => {};
 let _notifyProcessingCancelledByEscape: () => void = () => {};
 
+let currentAppStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle'; // Local status variable
+
 export function initializeShortcutManager(dependencies: {
-    sendRecordingStatus: typeof _sendRecordingStatus;
     sendRawShortcutAction: typeof _sendRawShortcutAction;
     startRecording: typeof _startRecording;
     stopRecording: typeof _stopRecording;
     cancelRecording: typeof _cancelRecording;
     notifyProcessingCancelledByEscape: typeof _notifyProcessingCancelledByEscape;
 }): void {
-    _sendRecordingStatus = dependencies.sendRecordingStatus;
     _sendRawShortcutAction = dependencies.sendRawShortcutAction;
     _startRecording = dependencies.startRecording;
     _stopRecording = dependencies.stopRecording;
     _cancelRecording = dependencies.cancelRecording;
     _notifyProcessingCancelledByEscape = dependencies.notifyProcessingCancelledByEscape;
-    logger.info('Shortcut Manager initialized with dependencies.');
+
+    // Subscribe to status updates
+    statusEmitter.on('status-update', (status: typeof currentAppStatus) => {
+        logger.debug(`ShortcutManager received status update via emitter: ${status}`);
+        currentAppStatus = status;
+    });
+
+    logger.info('Shortcut Manager initialized and subscribed to status updates.');
 }
 
 function resetShortcutState(): void {
@@ -1059,20 +1058,17 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 currentState = ShortcutState.TOGGLE_RECORDING;
                 ignoreNextUpInToggle = true;
                 _startRecording();
-                _sendRecordingStatus('recording');
             } else {
                 logger.debug(`Second click on ${keyName} too late. Treating as new press.`);
                 currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
                 keyDownTime = now;
                 _startRecording();
-                _sendRecordingStatus('recording');
             }
         } else if (currentState === ShortcutState.IDLE) {
             logger.debug(`Key Down ${keyName} - Starting immediate recording (Potential Click/Hold).`);
             currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
             keyDownTime = now;
             _startRecording();
-            _sendRecordingStatus('recording');
         } else {
             logger.debug(`Ignoring duplicate Key Down ${keyName} in state ${ShortcutState[currentState]}.`);
         }
@@ -1099,7 +1095,6 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                     if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
                         logger.debug(`Double click timeout expired for ${keyName}. Confirmed single click (ignored). Resetting to IDLE.`);
                         resetShortcutState();
-                        _sendRecordingStatus('idle');
                     }
                 }, DOUBLE_CLICK_WINDOW);
 
@@ -1107,7 +1102,6 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 logger.info(`Hold Released ${keyName}. Stopping PTT Recording.`);
                 _sendRawShortcutAction('holdEnd', keyName);
                 _stopRecording();
-                _sendRecordingStatus('processing');
                 resetShortcutState();
             }
         } else if (currentState === ShortcutState.TOGGLE_RECORDING) {
@@ -1118,7 +1112,6 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 logger.info(`Stopping Toggle Recording due to UP event.`);
                 _sendRawShortcutAction('toggleStop', keyName);
                 _stopRecording();
-                _sendRecordingStatus('processing');
                 resetShortcutState();
             }
         } else {
@@ -1129,22 +1122,18 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
 
 function handleEscapeKey(): void {
     logger.info('Escape key pressed (from Swift).');
-    const currentStatus = mainProcessRecordingStatus;
 
-    if (currentStatus === 'recording') {
+    if (currentAppStatus === 'recording') {
         logger.info('🔴 Cancelling active recording via Escape key.');
         _cancelRecording();
         resetShortcutState();
-        _sendRecordingStatus('idle');
-    } else if (currentStatus === 'processing') {
+    } else if (currentAppStatus === 'processing') {
         logger.info('🟡 Cancelling ongoing processing via Escape key.');
         _notifyProcessingCancelledByEscape();
         resetShortcutState();
-        _sendRecordingStatus('idle');
     } else if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
          logger.info('🟡 Cancelling wait for double-click via Escape key.');
          resetShortcutState();
-         _sendRecordingStatus('idle');
     } else {
         logger.debug('Escape pressed, but not in a cancellable state.');
     }
@@ -1243,11 +1232,6 @@ export function stopKeyMonitor(): void {
         resetShortcutState();
         logger.info('Key monitor stopped.');
     }
-}
-
-let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
-export function updateMainProcessStatus(status: typeof mainProcessRecordingStatus): void {
-    mainProcessRecordingStatus = status;
 }
 
 ================
@@ -2069,7 +2053,7 @@ app.on('before-quit', () => {
 ================
 File: src/main/index.ts
 ================
-import { app, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
@@ -2080,11 +2064,28 @@ import { EnhancementManager } from './enhancement/EnhancementManager';
 import * as WindowManager from './modules/windowManager';
 import * as ShortcutManager from './modules/shortcutManager';
 import * as IpcHandlers from './modules/ipcHandlers';
+import { EventEmitter } from 'events';
+
+// Central status emitter
+export const statusEmitter = new EventEmitter();
 
 let tray: Tray | null = null;
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
 let processingCancelledByEscape = false;
+
+export function sendRecordingStatus(status: 'idle' | 'recording' | 'processing' | 'error'): void {
+    logger.info(`Updating status to: ${status}`);
+    processingCancelledByEscape = status === 'error';
+
+    // Emit the status update event
+    statusEmitter.emit('status-update', status);
+
+    // WindowManager still needs direct calls for now, will be refactored
+    WindowManager.sendToMain('status-update', status);
+    WindowManager.sendToWidget('widget-status-update', status);
+    WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
+}
 
 app.whenReady().then(async () => {
     logger.info('App ready, initializing...');
@@ -2102,15 +2103,6 @@ app.whenReady().then(async () => {
     transcriptionManager = new TranscriptionManager();
     enhancementManager = new EnhancementManager();
     logger.info('Core managers (Transcription, Enhancement) initialized.');
-
-    const sendRecordingStatus = (status: 'idle' | 'recording' | 'processing' | 'error'): void => {
-        logger.info(`[Main] Sending status update: ${status}`);
-        ShortcutManager.updateMainProcessStatus(status);
-        IpcHandlers.updateIpcHandlerStatus(status);
-        WindowManager.sendToMain('recording-status', status);
-        WindowManager.sendToWidget('widget-status-update', status);
-        WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
-    };
 
     const sendRawShortcutAction = (action: string, keyName: string): void => {
         WindowManager.sendToMain('shortcutAction', action, keyName);
@@ -2141,7 +2133,6 @@ app.whenReady().then(async () => {
     };
 
     ShortcutManager.initializeShortcutManager({
-        sendRecordingStatus,
         sendRawShortcutAction,
         startRecording,
         stopRecording,
@@ -2154,7 +2145,6 @@ app.whenReady().then(async () => {
         enhancementManager,
         getProcessingCancelledFlag,
         setProcessingCancelledFlag,
-        sendRecordingStatus,
     });
 
     IpcHandlers.setupIpcHandlers();
@@ -4732,7 +4722,7 @@ let audioChunks: Blob[] = [];
 let audioStream: MediaStream | null = null;
 let audioContext: AudioContext | null = null;
 
-const SILENCE_THRESHOLD = 0.1;
+const SILENCE_THRESHOLD = 0.07;
 const DESIRED_AUDIO_BITRATE = 32000;
 
 export function initializeAudioRecorder(): () => void {
