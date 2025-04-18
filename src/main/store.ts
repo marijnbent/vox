@@ -5,12 +5,11 @@ interface DictionarySettings {
 }
 
 interface TranscriptionSettings {
-  provider: 'openai' | 'deepgram' | 'local';
+  provider: 'openai' | 'deepgram';
   openaiApiKey: string;
   openaiModel: 'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe';
   deepgramApiKey: string;
   deepgramModel: 'nova-3' | 'enhanced' | 'whisper-large';
-  localModelName: string;
 }
 
 interface EnhancementSettings {
@@ -74,12 +73,11 @@ const store = new Store<StoreSchema>({
       words: []
     },
     transcription: {
-      provider: 'openai',
+      provider: 'deepgram',
       openaiApiKey: '',
       openaiModel: 'gpt-4o-mini-transcribe',
       deepgramApiKey: '',
-      deepgramModel: 'nova-3',
-      localModelName: 'base'
+      deepgramModel: 'nova-3'
     },
     enhancements: {
       enabled: false,
@@ -88,7 +86,7 @@ const store = new Store<StoreSchema>({
       openaiModel: 'gpt-4.1-mini',
       openaiBaseUrl: '',
       geminiApiKey: '',
-      geminiModel: 'gemini-2.0-flash',
+      geminiModel: 'gemini-2.0-flash-lite',
       customApiKey: '',
       customModelName: '',
       customBaseUrl: '',

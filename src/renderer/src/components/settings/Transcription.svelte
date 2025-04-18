@@ -6,51 +6,36 @@
   const openaiModel = writable<"gpt-4o-mini-transcribe" | "gpt-4o-transcribe">(
     "gpt-4o-mini-transcribe",
   );
-  const provider = writable<"openai" | "deepgram" | "local">("openai");
+  const provider = writable<"openai" | "deepgram">("openai");
   const deepgramApiKey = writable("");
   const deepgramModel = writable<"nova-3" | "enhanced" | "whisper-large">(
     "nova-3",
   );
-  const localModelName = writable<string>("base");
-
-  const availableLocalModelsStore = writable<
-    { value: string; label: string }[]
-  >([]); // Store for models
 
   let isLoading = true;
-  let downloadStatus = writable("");
 
   onMount(async () => {
     try {
       const initialSettingsPromise = window.api.getStoreValue(
         "transcription",
       ) as Promise<any | undefined>;
-      const modelsPromise = window.api.getAvailableLocalModels();
 
-      const [initialSettings, models] = await Promise.all([
+      const [initialSettings] = await Promise.all([
         initialSettingsPromise,
-        modelsPromise,
       ]);
 
-      provider.set(initialSettings.provider || "openai");
+      const currentProvider = initialSettings.provider;
+      if (currentProvider === 'openai' || currentProvider === 'deepgram') {
+          provider.set(currentProvider);
+      } else {
+          provider.set('deepgram');
+          window.api.log('warn', `Invalid or local provider "${currentProvider}" found in settings, defaulting to deepgram.`);
+      }
+
       openaiApiKey.set(initialSettings.openaiApiKey || "");
       openaiModel.set(initialSettings.openaiModel || "gpt-4o-mini-transcribe");
       deepgramApiKey.set(initialSettings.deepgramApiKey || "");
       deepgramModel.set(initialSettings.deepgramModel || "nova-3");
-      localModelName.set(initialSettings.localModelName || "base");
-
-      if (models && Array.isArray(models)) {
-        availableLocalModelsStore.set(
-          models.map((model) => ({ value: model, label: model })),
-        );
-        window.api.log("info", "Loaded available local models via API.");
-      } else {
-        window.api.log(
-          "warn",
-          "Could not load available local models via API.",
-        );
-        availableLocalModelsStore.set([]);
-      }
     } catch (error) {
       window.api.log("error", "Failed to load transcription settings:", error);
     } finally {
@@ -69,7 +54,6 @@
       openaiModel: get(openaiModel),
       deepgramApiKey: get(deepgramApiKey),
       deepgramModel: get(deepgramModel),
-      localModelName: get(localModelName),
     };
 
     saveTimeout = setTimeout(async () => {
@@ -92,46 +76,8 @@
     const currentModelValue = $openaiModel;
     const currentDeepgramApiKeyValue = $deepgramApiKey;
     const currentDeepgramModelValue = $deepgramModel;
-    const currentLocalModelValue = $localModelName;
 
     saveSettings();
-    if (
-      currentProviderValue !== "local" ||
-      (currentProviderValue === "local" && currentLocalModelValue)
-    ) {
-      downloadStatus.set("");
-    }
-  }
-
-  async function downloadModel() {
-    const modelToDownload = get(localModelName);
-    if (!modelToDownload) {
-      downloadStatus.set("Please select a model first.");
-      return;
-    }
-    downloadStatus.set(
-      `Downloading model ${modelToDownload}... (This may take a while)`,
-    );
-    window.api.log("info", `Requesting download for model: ${modelToDownload}`);
-    try {
-      await window.api.downloadLocalModel(modelToDownload);
-      downloadStatus.set(
-        `Model ${modelToDownload} downloaded successfully (or already exists).`,
-      );
-      window.api.log(
-        "info",
-        `Model download request successful for: ${modelToDownload}`,
-      );
-    } catch (error: any) {
-      window.api.log(
-        "error",
-        `Failed to download model ${modelToDownload}:`,
-        error,
-      );
-      downloadStatus.set(
-        `Error downloading model: ${error.message || "Unknown error"}`,
-      );
-    }
   }
 </script>
 
@@ -154,7 +100,6 @@
         >
           <option value="openai">OpenAI Whisper API</option>
           <option value="deepgram">Deepgram API</option>
-          <option value="local">Local Whisper Model</option>
         </select>
       </div>
 
@@ -241,57 +186,6 @@
             <span class="label-text-alt">Select the Deepgram model to use.</span
             >
           </label>
-        </div>
-      {/if}
-
-      {#if $provider === "local"}
-        <div class="form-control w-full max-w-md space-y-4">
-          <div>
-            <label class="label" for="local-model-select">
-              <span class="label-text">Local Whisper Model</span>
-              <span class="label-text-alt"
-                >Models are downloaded on demand.</span
-              >
-            </label>
-            <select
-              id="local-model-select"
-              class="select select-bordered w-full"
-              bind:value={$localModelName}
-              disabled={$availableLocalModelsStore.length === 0}
-            >
-              {#if $availableLocalModelsStore.length === 0 && !isLoading}
-                <option value="" disabled selected>Could not load models</option
-                >
-              {/if}
-              {#each $availableLocalModelsStore as model}
-                <option value={model.value}>{model.label}</option>
-              {/each}
-            </select>
-            <label class="label">
-              <span class="label-text-alt"
-                >Larger models are more accurate but slower and require more
-                resources. `.en` models are English-only.</span
-              >
-            </label>
-          </div>
-
-          <div>
-            <button
-              class="btn btn-secondary btn-sm"
-              on:click={downloadModel}
-              disabled={!$localModelName}
-            >
-              Download/Verify Model: {$localModelName || "Select Model"}
-            </button>
-            {#if $downloadStatus}
-              <p class="text-sm mt-2">{$downloadStatus}</p>
-            {/if}
-            <p class="text-xs text-base-content/70 mt-1">
-              Clicking download will fetch the selected model if it's not
-              already present locally. This uses the `npx nodejs-whisper
-              download` command. Check console/logs for detailed progress.
-            </p>
-          </div>
         </div>
       {/if}
     </div>

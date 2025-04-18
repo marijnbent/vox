@@ -10,7 +10,6 @@ import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
-import { LocalWhisperService, AVAILABLE_LOCAL_MODELS } from '../transcription/LocalWhisperService';
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
@@ -88,26 +87,6 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('clearAllHistory', () => {
          logger.info(`IPC: Received request to clear all history`);
          return historyService.clearAllHistory();
-    });
-
-    ipcMain.handle('getAvailableLocalModels', () => {
-        logger.info('IPC: Received request for available local models.');
-        return AVAILABLE_LOCAL_MODELS;
-    });
-
-    ipcMain.handle('download-local-model', async (_event, modelName: string): Promise<void> => {
-        logger.info(`IPC received request to download local model: ${modelName}`);
-        if (!AVAILABLE_LOCAL_MODELS.includes(modelName)) {
-            logger.error(`Invalid model name requested for download: ${modelName}`);
-            throw new Error(`Invalid model name: ${modelName}`);
-        }
-        try {
-            await LocalWhisperService.downloadModel(modelName);
-            logger.info(`Local model download process initiated successfully for: ${modelName}`);
-        } catch (error: any) {
-            logger.error(`Error initiating local model download for ${modelName}:`, error);
-            throw new Error(`Failed to download model ${modelName}: ${error.message || 'Unknown error'}`);
-        }
     });
 
     ipcMain.on('processing-cancelled-silence', handleProcessingCancelledSilence);

@@ -1,11 +1,10 @@
 import { TranscriptionService } from './TranscriptionService'
 import { OpenaiWhisperService } from './OpenaiWhisperService'
 import { DeepgramService } from './DeepgramService'
-import { LocalWhisperService } from './LocalWhisperService'
 import store from '../store'
 import { logger } from '../logger'
 
-type TranscriptionMode = 'openai' | 'deepgram' | 'local'
+type TranscriptionMode = 'openai' | 'deepgram'
 
 export class TranscriptionManager {
   private services: Map<TranscriptionMode, TranscriptionService>
@@ -15,13 +14,11 @@ export class TranscriptionManager {
     this.services = new Map()
     this.services.set('openai', new OpenaiWhisperService())
     this.services.set('deepgram', new DeepgramService())
-    this.services.set('local', new LocalWhisperService())
     this.updateModeFromSettings()
     store.onDidChange('transcription', (newValue, oldValue) => {
       const providerChanged = newValue?.provider !== oldValue?.provider;
-      const localModelChanged = newValue?.provider === 'local' && newValue?.localModelName !== oldValue?.localModelName;
 
-      if (providerChanged || localModelChanged) {
+      if (providerChanged) {
           logger.info('Transcription settings changed, updating manager.')
           this.updateModeFromSettings()
        }

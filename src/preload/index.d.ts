@@ -45,8 +45,6 @@ declare global {
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
       getDefaultPromptContent: () => Promise<string>;
-      getAvailableLocalModels: () => Promise<string[]>;
-      downloadLocalModel: (modelName: string) => Promise<void>;
     }
   }
 }

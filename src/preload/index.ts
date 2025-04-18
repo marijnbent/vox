@@ -79,8 +79,6 @@ const api = {
   clearAllHistory: (): Promise<boolean> => ipcRenderer.invoke('clearAllHistory'),
   notifySilenceCancellation: (): void => ipcRenderer.send('processing-cancelled-silence'),
   getDefaultPromptContent: (): Promise<string> => ipcRenderer.invoke('getDefaultPromptContent'),
-  getAvailableLocalModels: (): Promise<string[]> => ipcRenderer.invoke('getAvailableLocalModels'),
-  downloadLocalModel: (modelName: string): Promise<void> => ipcRenderer.invoke('download-local-model', modelName),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
 };
 
