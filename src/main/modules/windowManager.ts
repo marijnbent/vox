@@ -2,6 +2,7 @@ import { app, BrowserWindow, screen, shell } from 'electron';
 import { join } from 'path';
 import { is } from '@electron-toolkit/utils';
 import icon from '../../../resources/icon.png?asset';
+import { logger } from '../logger';
 
 let mainWindow: BrowserWindow | null = null;
 let widgetWindow: BrowserWindow | null = null;
@@ -101,9 +102,13 @@ export function createWidgetWindow(): BrowserWindow | null {
     }
 
     if (isUrl) {
-        widgetWindow.loadURL(loadPath).catch(err => {});
+        widgetWindow.loadURL(loadPath).catch(err => {
+            logger.error('Failed to load widget URL:', err);
+        });
     } else {
-        widgetWindow.loadFile(loadPath).catch(err => {});
+        widgetWindow.loadFile(loadPath).catch(err => {
+            logger.error('Failed to load widget URL:', err);
+        });
     }
 
     widgetWindow.on('closed', () => {

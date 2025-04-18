@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import store from './store';
-import { logger, setupRendererLogger, setLogCallback } from './logger';
+import { logger, setupRendererLogger } from './logger';
 import { TranscriptionManager } from './transcription/TranscriptionManager';
 import { EnhancementManager } from './enhancement/EnhancementManager';
 import * as WindowManager from './modules/windowManager';

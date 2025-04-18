@@ -63,7 +63,6 @@ src/
       windowManager.ts
     transcription/
       DeepgramService.ts
-      LocalWhisperService.ts
       OpenaiWhisperService.ts
       TranscriptionManager.ts
       TranscriptionService.ts
@@ -90,6 +89,7 @@ src/
           Dictionary.svelte
           Enhancements.svelte
           History.svelte
+          Logs.svelte
           Permissions.svelte
           Shortcuts.svelte
           Transcription.svelte
@@ -112,7 +112,6 @@ electron-builder.yml
 electron.vite.config.ts
 eslint.config.mjs
 package.json
-plan.md
 README.md
 svelte.config.mjs
 tsconfig.json
@@ -621,8 +620,10 @@ export class OpenaiEnhancementService implements EnhancementService {
 File: src/main/modules/ipcHandlers.ts
 ================
 import Mustache from 'mustache';
-import { ipcMain, systemPreferences, shell, clipboard } from 'electron';
+import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron';
 import { exec } from 'child_process';
+import fs from 'fs/promises';
+import log from 'electron-log';
 import store from '../store';
 import { logger } from '../logger';
 import { TranscriptionManager } from '../transcription/TranscriptionManager';
@@ -632,35 +633,30 @@ import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
-import { LocalWhisperService, AVAILABLE_LOCAL_MODELS } from '../transcription/LocalWhisperService';
-import { statusEmitter } from '../index'; // Import the emitter
+
+
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
-let currentAppStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle'; // Local status variable
 
 export function initializeIpcHandlers(dependencies: {
     transcriptionManager: TranscriptionManager;
     enhancementManager: EnhancementManager;
     getProcessingCancelledFlag: () => boolean;
     setProcessingCancelledFlag: (value: boolean) => void;
+    sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void;
 }): void {
     transcriptionManager = dependencies.transcriptionManager;
     enhancementManager = dependencies.enhancementManager;
     _getProcessingCancelledFlag = dependencies.getProcessingCancelledFlag;
     _setProcessingCancelledFlag = dependencies.setProcessingCancelledFlag;
-
-    // Subscribe to status updates
-    statusEmitter.on('status-update', (status: typeof currentAppStatus) => {
-        logger.debug(`IpcHandlers received status update via emitter: ${status}`);
-        currentAppStatus = status;
-    });
-
-    logger.info('IPC Handlers initialized and subscribed to status updates.');
+    _sendRecordingStatus = dependencies.sendRecordingStatus;
+    logger.info('IPC Handlers initialized with dependencies.');
 }
 
 let _getProcessingCancelledFlag: () => boolean = () => false;
 let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
+let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 
 export function setupIpcHandlers(): void {
     logger.info('Setting up IPC Handlers...');
@@ -718,21 +714,6 @@ export function setupIpcHandlers(): void {
          return historyService.clearAllHistory();
     });
 
-    ipcMain.handle('download-local-model', async (_event, modelName: string): Promise<void> => {
-        logger.info(`IPC received request to download local model: ${modelName}`);
-        if (!AVAILABLE_LOCAL_MODELS.includes(modelName)) {
-            logger.error(`Invalid model name requested for download: ${modelName}`);
-            throw new Error(`Invalid model name: ${modelName}`);
-        }
-        try {
-            await LocalWhisperService.downloadModel(modelName);
-            logger.info(`Local model download process initiated successfully for: ${modelName}`);
-        } catch (error: any) {
-            logger.error(`Error initiating local model download for ${modelName}:`, error);
-            throw new Error(`Failed to download model ${modelName}: ${error.message || 'Unknown error'}`);
-        }
-    });
-
     ipcMain.on('processing-cancelled-silence', handleProcessingCancelledSilence);
 
     ipcMain.on('widget-stop-recording', () => {
@@ -749,6 +730,32 @@ export function setupIpcHandlers(): void {
       return getDefaultPromptTemplate();
     });
 
+    ipcMain.handle('getLogFilePath', () => {
+        try {
+            const logPath = log.transports.file.getFile().path;
+            logger.info(`IPC: Providing log file path: ${logPath}`);
+            return logPath;
+        } catch (error) {
+            logger.error('IPC: Error getting log file path:', error);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('getLogLines', async (_, lineCount: number = 500) => {
+        logger.info(`IPC: Received request for last ${lineCount} log lines.`);
+        try {
+            const logPath = log.transports.file.getFile().path;
+            const data = await fs.readFile(logPath, 'utf-8');
+            const lines = data.split('\n');
+            const lastLines = lines.slice(Math.max(lines.length - lineCount, 0));
+            logger.debug(`IPC: Returning ${lastLines.length} log lines.`);
+            return lastLines;
+        } catch (error) {
+            logger.error(`IPC: Error reading log file for getLogLines:`, error);
+            throw error;
+        }
+    });
+
     logger.info('IPC Handlers setup complete.');
 }
 
@@ -758,16 +765,20 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
 
     if (!transcriptionManager) {
         logger.error('IPC: Cannot transcribe audio, TranscriptionManager not initialized.');
+        _sendRecordingStatus('error');
         throw new Error('TranscriptionManager not initialized.');
     }
     if (!mainWindow) {
         logger.error('IPC: Cannot transcribe audio, mainWindow is not available.');
+        _sendRecordingStatus('error');
         throw new Error('Main window not available.');
     }
 
     logger.info(`IPC: Received audio data (${audio.audioData.byteLength} bytes, type: ${audio.mimeType}) for transcription.`);
+    _sendRecordingStatus('processing');
 
     let originalTranscriptionText = '';
+
     let finalText = '';
     let enhancementAttempted = false;
     let finalPromptRendered: string | null = null;
@@ -869,6 +880,7 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
         }
 
         sendToMain('transcription-result', finalText);
+        _sendRecordingStatus('idle');
 
         if (store.get('settings.autoPaste', true) && !_getProcessingCancelledFlag()) {
            logger.info('Auto-paste enabled, writing to clipboard and simulating paste...');
@@ -900,11 +912,15 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
     } catch (error: unknown) {
         if (_getProcessingCancelledFlag()) {
             logger.info('Processing cancelled by Escape during error handling.');
+            if (mainProcessRecordingStatus !== 'idle') {
+                _sendRecordingStatus('idle');
+            }
             return;
         }
         const message = error instanceof Error ? error.message : String(error);
         logger.error('IPC: Transcription failed:', message);
         sendToMain('transcription-error', message);
+        _sendRecordingStatus('error');
         throw error;
     }
 }
@@ -966,6 +982,14 @@ function handleOpenSettingsURL(_, url: string) {
 
 function handleProcessingCancelledSilence() {
     logger.info('IPC: Received notification that processing was cancelled due to silence.');
+
+    _sendRecordingStatus('idle');
+
+}
+
+let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
+export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
+    mainProcessRecordingStatus = status;
 }
 
 ================
@@ -975,7 +999,6 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { app } from 'electron';
 import path from 'path';
 import { logger } from '../logger';
-import { statusEmitter } from '../index'; // Import the emitter
 
 export enum ShortcutState {
     IDLE,
@@ -996,34 +1019,28 @@ let ignoreNextUpInToggle = false;
 const HOLD_DURATION_THRESHOLD = 500;
 const DOUBLE_CLICK_WINDOW = 500;
 
+let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 let _sendRawShortcutAction: (action: string, keyName: string) => void = () => {};
 let _startRecording: () => void = () => {};
 let _stopRecording: () => void = () => {};
 let _cancelRecording: () => void = () => {};
 let _notifyProcessingCancelledByEscape: () => void = () => {};
 
-let currentAppStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle'; // Local status variable
-
 export function initializeShortcutManager(dependencies: {
+    sendRecordingStatus: typeof _sendRecordingStatus;
     sendRawShortcutAction: typeof _sendRawShortcutAction;
     startRecording: typeof _startRecording;
     stopRecording: typeof _stopRecording;
     cancelRecording: typeof _cancelRecording;
     notifyProcessingCancelledByEscape: typeof _notifyProcessingCancelledByEscape;
 }): void {
+    _sendRecordingStatus = dependencies.sendRecordingStatus;
     _sendRawShortcutAction = dependencies.sendRawShortcutAction;
     _startRecording = dependencies.startRecording;
     _stopRecording = dependencies.stopRecording;
     _cancelRecording = dependencies.cancelRecording;
     _notifyProcessingCancelledByEscape = dependencies.notifyProcessingCancelledByEscape;
-
-    // Subscribe to status updates
-    statusEmitter.on('status-update', (status: typeof currentAppStatus) => {
-        logger.debug(`ShortcutManager received status update via emitter: ${status}`);
-        currentAppStatus = status;
-    });
-
-    logger.info('Shortcut Manager initialized and subscribed to status updates.');
+    logger.info('Shortcut Manager initialized with dependencies.');
 }
 
 function resetShortcutState(): void {
@@ -1040,9 +1057,14 @@ function resetShortcutState(): void {
 
 function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
     const now = Date.now();
-    logger.debug(`Key Event: ${keyName}_${type} | Current State: ${ShortcutState[currentState]}`);
+    logger.debug(`Key Event: ${keyName}_${type} | Current State: ${ShortcutState[currentState]} | Main Status: ${mainProcessRecordingStatus}`);
 
     if (type === 'DOWN') {
+        if (mainProcessRecordingStatus !== 'idle') {
+            logger.debug(`Ignoring Key Down ${keyName} because main status is 'processing'.`);
+            return;
+        }
+
         if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
             if (doubleClickTimeoutId) clearTimeout(doubleClickTimeoutId);
             doubleClickTimeoutId = null;
@@ -1053,17 +1075,20 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 currentState = ShortcutState.TOGGLE_RECORDING;
                 ignoreNextUpInToggle = true;
                 _startRecording();
+                _sendRecordingStatus('recording');
             } else {
                 logger.debug(`Second click on ${keyName} too late. Treating as new press.`);
                 currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
                 keyDownTime = now;
                 _startRecording();
+                _sendRecordingStatus('recording');
             }
         } else if (currentState === ShortcutState.IDLE) {
             logger.debug(`Key Down ${keyName} - Starting immediate recording (Potential Click/Hold).`);
             currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
             keyDownTime = now;
             _startRecording();
+            _sendRecordingStatus('recording');
         } else {
             logger.debug(`Ignoring duplicate Key Down ${keyName} in state ${ShortcutState[currentState]}.`);
         }
@@ -1090,6 +1115,7 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                     if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
                         logger.debug(`Double click timeout expired for ${keyName}. Confirmed single click (ignored). Resetting to IDLE.`);
                         resetShortcutState();
+                        _sendRecordingStatus('idle');
                     }
                 }, DOUBLE_CLICK_WINDOW);
 
@@ -1097,6 +1123,7 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 logger.info(`Hold Released ${keyName}. Stopping PTT Recording.`);
                 _sendRawShortcutAction('holdEnd', keyName);
                 _stopRecording();
+                _sendRecordingStatus('processing');
                 resetShortcutState();
             }
         } else if (currentState === ShortcutState.TOGGLE_RECORDING) {
@@ -1107,6 +1134,7 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 logger.info(`Stopping Toggle Recording due to UP event.`);
                 _sendRawShortcutAction('toggleStop', keyName);
                 _stopRecording();
+                _sendRecordingStatus('processing');
                 resetShortcutState();
             }
         } else {
@@ -1117,18 +1145,22 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
 
 function handleEscapeKey(): void {
     logger.info('Escape key pressed (from Swift).');
+    const currentStatus = mainProcessRecordingStatus;
 
-    if (currentAppStatus === 'recording') {
+    if (currentStatus === 'recording') {
         logger.info('🔴 Cancelling active recording via Escape key.');
         _cancelRecording();
         resetShortcutState();
-    } else if (currentAppStatus === 'processing') {
+        _sendRecordingStatus('idle');
+    } else if (currentStatus === 'processing') {
         logger.info('🟡 Cancelling ongoing processing via Escape key.');
         _notifyProcessingCancelledByEscape();
         resetShortcutState();
+        _sendRecordingStatus('idle');
     } else if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
          logger.info('🟡 Cancelling wait for double-click via Escape key.');
          resetShortcutState();
+         _sendRecordingStatus('idle');
     } else {
         logger.debug('Escape pressed, but not in a cancellable state.');
     }
@@ -1227,6 +1259,11 @@ export function stopKeyMonitor(): void {
         resetShortcutState();
         logger.info('Key monitor stopped.');
     }
+}
+
+let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
+export function updateMainProcessStatus(status: typeof mainProcessRecordingStatus): void {
+    mainProcessRecordingStatus = status;
 }
 
 ================
@@ -1440,15 +1477,18 @@ export class DeepgramService implements TranscriptionService {
 
     try {
       logger.info(`Sending audio buffer to Deepgram API for transcription... (MIME type: ${mimeType}, Buffer size: ${audioBuffer.length} bytes)`);
-      const modelName = store.get('transcription.deepgramModel', 'nova-2');
+      const modelName = store.get('transcription.deepgramModel', 'nova-3');
       logger.info(`Using Deepgram transcription model: ${modelName}`);
       const options: Record<string, any> = {
         model: modelName,
+        detect_language: true,
         smart_format: true
       };
+
       if (language) {
         options.language = language;
       }
+
       logger.info(`Audio format: ${mimeType}, sending ${audioBuffer.byteLength} bytes to Deepgram`);
       const { result, error } = await this.client.listen.prerecorded.transcribeFile(
         audioBuffer,
@@ -1474,185 +1514,6 @@ export class DeepgramService implements TranscriptionService {
       logger.error('Error during Deepgram transcription:', error);
       throw new Error(`Deepgram transcription failed: ${message}`);
     }
-  }
-}
-
-================
-File: src/main/transcription/LocalWhisperService.ts
-================
-import { TranscriptionService } from './TranscriptionService'
-import store from '../store'
-import fs from 'fs'
-import os from 'os'
-import path from 'path'
-import { logger } from '../logger'
-import { nodewhisper, IOptions } from 'nodejs-whisper'
-
-interface WhisperOptions {
-  outputInCsv?: boolean
-  outputInJson?: boolean
-  outputInJsonFull?: boolean
-  outputInLrc?: boolean
-  outputInSrt?: boolean
-  outputInText?: boolean
-  outputInVtt?: boolean
-  outputInWords?: boolean
-  translateToEnglish?: boolean
-  timestamps_length?: number
-  wordTimestamps?: boolean
-  splitOnWord?: boolean
-  language?: string
-}
-
-export const AVAILABLE_LOCAL_MODELS = [
-  'tiny', 'tiny.en',
-  'base', 'base.en',
-  'small', 'small.en',
-  'medium', 'medium.en',
-  'large-v2', 'large-v3',
-  'large-v3-turbo'
-];
-
-export class LocalWhisperService implements TranscriptionService {
-
-  constructor() {
-    logger.info('LocalWhisperService initialized.');
-  }
-
-  private getExtensionFromMimeType(mimeType: string): string | null {
-    const mimeMap: { [key: string]: string } = {
-      'audio/webm': 'webm',
-      'audio/webm;codecs=opus': 'webm',
-      'audio/wav': 'wav',
-      'audio/mp4': 'mp4',
-      'audio/mp3': 'mp3',
-      'audio/mpeg': 'mpeg',
-      'audio/mpga': 'mpga',
-      'audio/aac': 'm4a',
-      'audio/x-m4a': 'm4a',
-      'audio/m4a': 'm4a',
-      'audio/ogg': 'ogg',
-      'audio/ogg;codecs=opus': 'ogg',
-    };
-    const baseMimeType = mimeType.split(';')[0];
-    if (mimeMap[baseMimeType]) {
-      return mimeMap[baseMimeType];
-    }
-    logger.warn(`Could not determine file extension for MIME type: ${mimeType}`);
-    return 'wav'; 
-  }
-
-  async transcribe(audioBuffer: Buffer, mimeType: string, language?: string): Promise<string> {
-    const provider = store.get('transcription.provider');
-    if (provider !== 'local') {
-      logger.error('LocalWhisperService transcribe called when provider is not local.');
-      throw new Error('LocalWhisperService called incorrectly.');
-    }
-
-    const selectedModel = store.get('transcription.localModelName', 'base.en');
-    logger.info(`Using local Whisper model: ${selectedModel}`);
-
-    const extension = this.getExtensionFromMimeType(mimeType) || 'wav';
-    const tempFilePath = path.join(os.tmpdir(), `vox-local-audio-${Date.now()}.${extension}`);
-
-    try {
-      logger.info(`Writing audio buffer to temporary file for local transcription: ${tempFilePath}`);
-      await fs.promises.writeFile(tempFilePath, audioBuffer);
-
-      const whisperOptions: WhisperOptions = {
-        outputInText: true,
-        translateToEnglish: false,
-        wordTimestamps: false,
-        splitOnWord: true,
-        language: language || 'auto'
-      };
-
-      const useGpu = process.platform === 'darwin';
-      logger.info(`Local transcription GPU (Metal) usage: ${useGpu}`);
-
-      const options: IOptions = {
-        modelName: selectedModel,
-        whisperOptions: whisperOptions,
-      };
-
-      const loggableOptions = { ...options, logger: undefined, whisperOptions };
-      logger.info(`Calling nodejs-whisper with options: ${JSON.stringify(loggableOptions)}`);
-
-      options.whisperOptions!.outputInText = true;
-      options.whisperOptions!.outputInSrt = false;
-      options.whisperOptions!.outputInVtt = false;
-      options.whisperOptions!.outputInJson = false;
-
-      await nodewhisper(tempFilePath, options);
-
-      const outputTxtPath = tempFilePath.replace(`.${extension}`, '.txt');
-
-      if (fs.existsSync(outputTxtPath)) {
-        const transcript = await fs.promises.readFile(outputTxtPath, 'utf-8');
-        logger.info(`Local transcription successful. Result length: ${transcript.length}`);
-        try {
-          await fs.promises.unlink(outputTxtPath);
-          logger.debug(`Deleted output text file: ${outputTxtPath}`);
-        } catch (cleanupError) {
-          logger.warn(`Failed to delete output text file ${outputTxtPath}:`, cleanupError);
-        }
-        return transcript.trim();
-      } else {
-        logger.error(`Output text file not found after nodejs-whisper execution: ${outputTxtPath}`);
-        throw new Error('Local transcription failed: Output file not generated.');
-      }
-
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('Error during local Whisper transcription:', error);
-      throw new Error(`Local transcription failed: ${message}`);
-    } finally {
-      try {
-        if (fs.existsSync(tempFilePath)) {
-          await fs.promises.unlink(tempFilePath);
-          logger.info(`Temporary audio file deleted: ${tempFilePath}`);
-        }
-      } catch (cleanupError) {
-        logger.warn(`Failed to delete temporary audio file ${tempFilePath}:`, cleanupError);
-      }
-    }
-  }
-
-  static async downloadModel(modelName: string): Promise<void> {
-      if (!AVAILABLE_LOCAL_MODELS.includes(modelName)) {
-          logger.error(`Attempted to download invalid local model: ${modelName}`);
-          throw new Error(`Invalid local model name: ${modelName}`);
-      }
-      logger.info(`Attempting to download local model: ${modelName}...`);
-      try {
-          const { exec } = await import('child_process');
-          const command = `npx nodejs-whisper download ${modelName}`;
-          logger.info(`Executing command: ${command}`);
-
-          await new Promise<void>((resolve, reject) => {
-              const process = exec(command, (error, stdout, stderr) => {
-                  if (error) {
-                      logger.error(`Error downloading model ${modelName}: ${error.message}`);
-                      logger.error(`stderr: ${stderr}`);
-                      reject(error);
-                      return;
-                  }
-                  if (stderr) {
-                      logger.warn(`stderr during model download ${modelName}: ${stderr}`);
-                  }
-                  logger.info(`stdout for model download ${modelName}: ${stdout}`);
-                  logger.info(`Successfully downloaded model: ${modelName}`);
-                  resolve();
-              });
-
-              process.stdout?.on('data', (data) => logger.debug(`[Download ${modelName} stdout]: ${data}`));
-              process.stderr?.on('data', (data) => logger.warn(`[Download ${modelName} stderr]: ${data}`));
-          });
-
-      } catch (error) {
-          logger.error(`Failed to download model ${modelName}:`, error);
-          throw error;
-      }
   }
 }
 
@@ -1776,11 +1637,10 @@ File: src/main/transcription/TranscriptionManager.ts
 import { TranscriptionService } from './TranscriptionService'
 import { OpenaiWhisperService } from './OpenaiWhisperService'
 import { DeepgramService } from './DeepgramService'
-import { LocalWhisperService } from './LocalWhisperService'
 import store from '../store'
 import { logger } from '../logger'
 
-type TranscriptionMode = 'openai' | 'deepgram' | 'local'
+type TranscriptionMode = 'openai' | 'deepgram'
 
 export class TranscriptionManager {
   private services: Map<TranscriptionMode, TranscriptionService>
@@ -1790,13 +1650,11 @@ export class TranscriptionManager {
     this.services = new Map()
     this.services.set('openai', new OpenaiWhisperService())
     this.services.set('deepgram', new DeepgramService())
-    this.services.set('local', new LocalWhisperService())
     this.updateModeFromSettings()
     store.onDidChange('transcription', (newValue, oldValue) => {
       const providerChanged = newValue?.provider !== oldValue?.provider;
-      const localModelChanged = newValue?.provider === 'local' && newValue?.localModelName !== oldValue?.localModelName;
 
-      if (providerChanged || localModelChanged) {
+      if (providerChanged) {
           logger.info('Transcription settings changed, updating manager.')
           this.updateModeFromSettings()
        }
@@ -2045,34 +1903,17 @@ import path from 'path';
 import fs from 'fs';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import store from './store';
-import { logger, setupRendererLogger } from './logger';
+import { logger, setupRendererLogger, setLogCallback } from './logger';
 import { TranscriptionManager } from './transcription/TranscriptionManager';
 import { EnhancementManager } from './enhancement/EnhancementManager';
 import * as WindowManager from './modules/windowManager';
 import * as ShortcutManager from './modules/shortcutManager';
 import * as IpcHandlers from './modules/ipcHandlers';
-import { EventEmitter } from 'events';
-
-// Central status emitter
-export const statusEmitter = new EventEmitter();
 
 let tray: Tray | null = null;
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
 let processingCancelledByEscape = false;
-
-export function sendRecordingStatus(status: 'idle' | 'recording' | 'processing' | 'error'): void {
-    logger.info(`Updating status to: ${status}`);
-    processingCancelledByEscape = status === 'error';
-
-    // Emit the status update event
-    statusEmitter.emit('status-update', status);
-
-    // WindowManager still needs direct calls for now, will be refactored
-    WindowManager.sendToMain('status-update', status);
-    WindowManager.sendToWidget('widget-status-update', status);
-    WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
-}
 
 app.whenReady().then(async () => {
     logger.info('App ready, initializing...');
@@ -2090,6 +1931,15 @@ app.whenReady().then(async () => {
     transcriptionManager = new TranscriptionManager();
     enhancementManager = new EnhancementManager();
     logger.info('Core managers (Transcription, Enhancement) initialized.');
+
+    const sendRecordingStatus = (status: 'idle' | 'recording' | 'processing' | 'error'): void => {
+        logger.info(`[Main] Sending status update: ${status}`);
+        ShortcutManager.updateMainProcessStatus(status);
+        IpcHandlers.updateIpcHandlerStatus(status);
+        WindowManager.sendToMain('recording-status', status);
+        WindowManager.sendToWidget('widget-status-update', status);
+        WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
+    };
 
     const sendRawShortcutAction = (action: string, keyName: string): void => {
         WindowManager.sendToMain('shortcutAction', action, keyName);
@@ -2120,6 +1970,7 @@ app.whenReady().then(async () => {
     };
 
     ShortcutManager.initializeShortcutManager({
+        sendRecordingStatus,
         sendRawShortcutAction,
         startRecording,
         stopRecording,
@@ -2132,9 +1983,13 @@ app.whenReady().then(async () => {
         enhancementManager,
         getProcessingCancelledFlag,
         setProcessingCancelledFlag,
+        sendRecordingStatus,
     });
 
     IpcHandlers.setupIpcHandlers();
+
+    logger.info('Log callback set for IPC communication.');
+
 
     WindowManager.createMainWindow();
     WindowManager.createWidgetWindow();
@@ -2269,14 +2124,16 @@ log.transports.console.level = 'debug';
 log.initialize();
 
 export function mainLog(level: 'info' | 'warn' | 'error' | 'debug' | 'verbose', message: string, ...args: unknown[]): void {
-  log[level](`[Main] ${message}`, ...args);
+  const fullMessage = `[Main] ${message} ${args.map(String).join(' ')}`;
+  log[level](fullMessage);
 }
 
 export function setupRendererLogger(): void {
   ipcMain.on('logFromRenderer', (_event, level: string, message: string, ...args: unknown[]) => {
     const validLevels = ['info', 'warn', 'error', 'debug', 'verbose'];
     const logLevel = validLevels.includes(level) ? level as 'info' | 'warn' | 'error' | 'debug' | 'verbose' : 'info';
-    log[logLevel](`[Renderer] ${message}`, ...args);
+    const fullMessage = `[Renderer] ${message} ${args.map(String).join(' ')}`;
+    log[logLevel](fullMessage);
   });
   mainLog('info', 'Renderer logger initialized via IPC.');
 }
@@ -2299,12 +2156,11 @@ interface DictionarySettings {
 }
 
 interface TranscriptionSettings {
-  provider: 'openai' | 'deepgram' | 'local';
+  provider: 'openai' | 'deepgram';
   openaiApiKey: string;
   openaiModel: 'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe';
   deepgramApiKey: string;
   deepgramModel: 'nova-3' | 'enhanced' | 'whisper-large';
-  localModelName: string;
 }
 
 interface EnhancementSettings {
@@ -2368,12 +2224,11 @@ const store = new Store<StoreSchema>({
       words: []
     },
     transcription: {
-      provider: 'openai',
+      provider: 'deepgram',
       openaiApiKey: '',
       openaiModel: 'gpt-4o-mini-transcribe',
       deepgramApiKey: '',
-      deepgramModel: 'nova-3',
-      localModelName: 'base'
+      deepgramModel: 'nova-3'
     },
     enhancements: {
       enabled: false,
@@ -2382,7 +2237,7 @@ const store = new Store<StoreSchema>({
       openaiModel: 'gpt-4.1-mini',
       openaiBaseUrl: '',
       geminiApiKey: '',
-      geminiModel: 'gemini-2.0-flash',
+      geminiModel: 'gemini-2.0-flash-lite',
       customApiKey: '',
       customModelName: '',
       customBaseUrl: '',
@@ -2455,7 +2310,9 @@ declare global {
       clearAllHistory: () => Promise<boolean>,
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
-      getDefaultPromptContent: () => Promise<string>
+      getDefaultPromptContent: () => Promise<string>;
+      getLogFilePath: () => Promise<string>;
+      getLogLines: (lineCount?: number) => Promise<string[]>;
     }
   }
 }
@@ -2544,6 +2401,8 @@ const api = {
   clearAllHistory: (): Promise<boolean> => ipcRenderer.invoke('clearAllHistory'),
   notifySilenceCancellation: (): void => ipcRenderer.send('processing-cancelled-silence'),
   getDefaultPromptContent: (): Promise<string> => ipcRenderer.invoke('getDefaultPromptContent'),
+  getLogFilePath: (): Promise<string> => ipcRenderer.invoke('getLogFilePath'),
+  getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
 };
 
@@ -2555,7 +2414,9 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
+  // @ts-ignore (define in dts)
   window.electron = electronAPI
+  // @ts-ignore (define in dts)
   window.api = api
 }
 
@@ -2671,7 +2532,8 @@ File: src/renderer/src/components/layout/AppLayout.svelte
     { id: 'enhancements', label: 'Enhancements', icon: 'sparkling' },
     { id: 'dictionary', label: 'Dictionary', icon: 'book' },
     { id: 'permissions', label: 'Permissions', icon: 'shield-check' },
-    { id: 'history', label: 'History', icon: 'time' }
+    { id: 'history', label: 'History', icon: 'time' },
+    { id: 'logs', label: 'Logs', icon: 'file-warning' },
   ];
 </script>
 
@@ -3856,6 +3718,87 @@ File: src/renderer/src/components/settings/History.svelte
 </div>
 
 ================
+File: src/renderer/src/components/settings/Logs.svelte
+================
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { writable, get } from "svelte/store";
+
+  const logLines = writable<string[]>([]);
+  const isLoading = writable(true);
+  const maxLines = writable(500);
+  const copied = writable(false);
+  let copyTimeout: ReturnType<typeof setTimeout>;
+
+  onMount(async () => {
+    isLoading.set(true);
+    try {
+      const initialLogs = await window.api.getLogLines(get(maxLines));
+      logLines.set(initialLogs);
+      window.api.log('info', `Logs component mounted, loaded ${initialLogs.length} lines.`);
+    } catch (error) {
+      window.api.log('error', 'Failed to load initial logs:', error);
+      logLines.set(['Error loading logs.']);
+    } finally {
+      isLoading.set(false);
+    }
+  });
+
+  onDestroy(() => {
+    clearTimeout(copyTimeout); // Clear timeout on component destroy
+  });
+
+  async function refreshLogs() {
+     isLoading.set(true);
+     try {
+       const refreshedLogs = await window.api.getLogLines(get(maxLines));
+       logLines.set(refreshedLogs);
+       window.api.log('info', `Refreshed logs, loaded ${refreshedLogs.length} lines.`);
+     } catch (error) {
+       window.api.log('error', 'Failed to refresh logs:', error);
+       logLines.set(['Error refreshing logs.']);
+     } finally {
+       isLoading.set(false);
+     }
+  }
+
+  async function copyLogs() {
+    try {
+      const logsText = get(logLines).join('\n');
+      await navigator.clipboard.writeText(logsText);
+      copied.set(true);
+      window.api.log('info', 'Copied logs to clipboard.');
+      clearTimeout(copyTimeout);
+      copyTimeout = setTimeout(() => copied.set(false), 2000);
+    } catch (error) {
+      window.api.log('error', 'Failed to copy logs to clipboard:', error);
+    }
+  }
+
+</script>
+
+<div class="p-4 space-y-4">
+  <h2 class="text-xl font-semibold">Application Logs</h2>
+
+  <div class="flex items-center space-x-4">
+     <button class="btn btn-sm btn-secondary" on:click={refreshLogs} disabled={$isLoading}>
+        Refresh
+     </button>
+     <button class="btn btn-sm" on:click={copyLogs} disabled={$isLoading || $logLines.length === 0}>
+        {#if $copied} Copied! {:else} Copy {/if}
+     </button>
+  </div>
+
+  <div class="bg-base-200 p-4 rounded-md font-mono text-xs overflow-auto h-96">
+    {#if $isLoading}
+      <p>Loading logs...</p>
+    {:else}
+      <pre>{$logLines.join('\n')}</pre>
+    {/if}
+  </div>
+</div>
+
+================
 File: src/renderer/src/components/settings/Permissions.svelte
 ================
 <script lang="ts">
@@ -4114,8 +4057,6 @@ File: src/renderer/src/components/settings/Shortcuts.svelte
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
 
-  // Define the available modifier keys for the UI and their mapping to the names
-  // the Swift tool and main process expect.
   const availableKeys = [
     { id: 'Fn', label: 'Fn', mapped: 'FN' }, // FN key is often problematic for global monitoring
     { id: 'ControlLeft', label: 'Control', mapped: 'CONTROL' }, // Use generic CONTROL
@@ -4262,97 +4203,86 @@ File: src/renderer/src/components/settings/Shortcuts.svelte
 File: src/renderer/src/components/settings/Transcription.svelte
 ================
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { writable, get } from 'svelte/store';
-  import { AVAILABLE_LOCAL_MODELS } from '../../../../main/transcription/LocalWhisperService'
+  import { onMount } from "svelte";
+  import { writable, get } from "svelte/store";
 
-  const openaiApiKey = writable('');
-  const openaiModel = writable<'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe'>('gpt-4o-mini-transcribe');
-  const provider = writable<'openai' | 'deepgram' | 'local'>('openai');
-  const deepgramApiKey = writable('');
-  const deepgramModel = writable<'nova-3' | 'enhanced' | 'whisper-large'>('nova-3');
-  const localModelName = writable<string>('base.en');
+  const openaiApiKey = writable("");
+  const openaiModel = writable<"gpt-4o-mini-transcribe" | "gpt-4o-transcribe">(
+    "gpt-4o-mini-transcribe",
+  );
+  const provider = writable<"openai" | "deepgram">("openai");
+  const deepgramApiKey = writable("");
+  const deepgramModel = writable<"nova-3" | "enhanced" | "whisper-large">(
+    "nova-3",
+  );
 
   let isLoading = true;
-  let downloadStatus = writable('');
 
   onMount(async () => {
     try {
-      const initialSettings = await window.api.getStoreValue('transcription') as any || {}; 
+      const initialSettingsPromise = window.api.getStoreValue(
+        "transcription",
+      ) as Promise<any | undefined>;
 
-      provider.set(initialSettings.provider || 'openai');
-      openaiApiKey.set(initialSettings.openaiApiKey || '');
-      openaiModel.set(initialSettings.openaiModel || 'gpt-4o-mini-transcribe');
-      deepgramApiKey.set(initialSettings.deepgramApiKey || '');
-      deepgramModel.set(initialSettings.deepgramModel || 'nova-3');
-      localModelName.set(initialSettings.localModelName || 'base');
+      const [initialSettings] = await Promise.all([
+        initialSettingsPromise,
+      ]);
 
+      const currentProvider = initialSettings.provider;
+      if (currentProvider === 'openai' || currentProvider === 'deepgram') {
+          provider.set(currentProvider);
+      } else {
+          provider.set('deepgram');
+          window.api.log('warn', `Invalid or local provider "${currentProvider}" found in settings, defaulting to deepgram.`);
+      }
+
+      openaiApiKey.set(initialSettings.openaiApiKey || "");
+      openaiModel.set(initialSettings.openaiModel || "gpt-4o-mini-transcribe");
+      deepgramApiKey.set(initialSettings.deepgramApiKey || "");
+      deepgramModel.set(initialSettings.deepgramModel || "nova-3");
     } catch (error) {
-      window.api.log('error', 'Failed to load transcription settings:', error);
+      window.api.log("error", "Failed to load transcription settings:", error);
     } finally {
       isLoading = false;
     }
-
   });
 
   let saveTimeout: NodeJS.Timeout | null = null;
   const saveSettings = () => {
-      if (isLoading) return;
-      if (saveTimeout) clearTimeout(saveTimeout);
+    if (isLoading) return;
+    if (saveTimeout) clearTimeout(saveTimeout);
 
-      const currentSettings = {
-          provider: get(provider),
-          openaiApiKey: get(openaiApiKey),
-          openaiModel: get(openaiModel),
-          deepgramApiKey: get(deepgramApiKey),
-          deepgramModel: get(deepgramModel),
-          localModelName: get(localModelName)
-      };
+    const currentSettings = {
+      provider: get(provider),
+      openaiApiKey: get(openaiApiKey),
+      openaiModel: get(openaiModel),
+      deepgramApiKey: get(deepgramApiKey),
+      deepgramModel: get(deepgramModel),
+    };
 
-      saveTimeout = setTimeout(async () => {
-          try {
-              await window.api.setStoreValue('transcription', currentSettings);
-              window.api.log('info', 'Transcription settings auto-saved.');
-          } catch (error) {
-              window.api.log('error', 'Failed to auto-save transcription settings:', error);
-          }
-      }, 500);
+    saveTimeout = setTimeout(async () => {
+      try {
+        await window.api.setStoreValue("transcription", currentSettings);
+        window.api.log("info", "Transcription settings auto-saved.");
+      } catch (error) {
+        window.api.log(
+          "error",
+          "Failed to auto-save transcription settings:",
+          error,
+        );
+      }
+    }, 500);
   };
 
   $: if (!isLoading) {
-      const currentProviderValue = $provider;
-      const currentApiKeyValue = $openaiApiKey;
-      const currentModelValue = $openaiModel;
-      const currentDeepgramApiKeyValue = $deepgramApiKey;
-      const currentDeepgramModelValue = $deepgramModel;
-      const currentLocalModelValue = $localModelName;
+    const currentProviderValue = $provider;
+    const currentApiKeyValue = $openaiApiKey;
+    const currentModelValue = $openaiModel;
+    const currentDeepgramApiKeyValue = $deepgramApiKey;
+    const currentDeepgramModelValue = $deepgramModel;
 
-      saveSettings();
-      if (currentProviderValue !== 'local' || (currentProviderValue === 'local' && currentLocalModelValue)) {
-          downloadStatus.set('');
-      }
+    saveSettings();
   }
-
-  const availableLocalModels = AVAILABLE_LOCAL_MODELS.map(model => ({ value: model, label: model }));
-
-  async function downloadModel() {
-      const modelToDownload = get(localModelName);
-      if (!modelToDownload) {
-          downloadStatus.set('Please select a model first.');
-          return;
-      }
-      downloadStatus.set(`Downloading model ${modelToDownload}... (This may take a while)`);
-      window.api.log('info', `Requesting download for model: ${modelToDownload}`);
-      try {
-          await window.api.invoke('download-local-model', modelToDownload);
-          downloadStatus.set(`Model ${modelToDownload} downloaded successfully (or already exists).`);
-          window.api.log('info', `Model download request successful for: ${modelToDownload}`);
-      } catch (error: any) {
-          window.api.log('error', `Failed to download model ${modelToDownload}:`, error);
-          downloadStatus.set(`Error downloading model: ${error.message || 'Unknown error'}`);
-      }
-  }
-
 </script>
 
 <div class="p-4 space-y-6">
@@ -4362,19 +4292,22 @@ File: src/renderer/src/components/settings/Transcription.svelte
     <p>Loading settings...</p>
   {:else}
     <div class="space-y-4">
-       <!-- Provider Selection -->
-       <div class="form-control">
-         <label class="label" for="provider-select">
-           <span class="label-text">Transcription Provider</span>
-         </label>
-         <select id="provider-select" class="select select-bordered w-full max-w-xs" bind:value={$provider}>
-           <option value="openai">OpenAI Whisper API</option>
-           <option value="deepgram">Deepgram API</option>
-           <option value="local">Local Whisper Model</option> 
-         </select>
-       </div>
+      <!-- Provider Selection -->
+      <div class="form-control">
+        <label class="label" for="provider-select">
+          <span class="label-text">Transcription Provider</span>
+        </label>
+        <select
+          id="provider-select"
+          class="select select-bordered w-full max-w-xs"
+          bind:value={$provider}
+        >
+          <option value="openai">OpenAI Whisper API</option>
+          <option value="deepgram">Deepgram API</option>
+        </select>
+      </div>
 
-      {#if $provider === 'openai'}
+      {#if $provider === "openai"}
         <div class="form-control">
           <label class="label" for="openai-api-key">
             <span class="label-text">OpenAI API Key (for Transcription)</span>
@@ -4387,7 +4320,13 @@ File: src/renderer/src/components/settings/Transcription.svelte
             bind:value={$openaiApiKey}
           />
           <label class="label">
-             <span class="label-text-alt">Required for OpenAI transcription. Get key from <a href="https://platform.openai.com/api-keys" target="_blank" class="link link-primary">OpenAI Platform</a>.</span>
+            <span class="label-text-alt"
+              >Required for OpenAI transcription. Get key from <a
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                class="link link-primary">OpenAI Platform</a
+              >.</span
+            >
           </label>
         </div>
 
@@ -4395,17 +4334,23 @@ File: src/renderer/src/components/settings/Transcription.svelte
           <label class="label" for="openai-model-select">
             <span class="label-text">OpenAI Whisper Model</span>
           </label>
-          <select id="openai-model-select" class="select select-bordered w-full max-w-xs" bind:value={$openaiModel}>
-            <option value="gpt-4o-mini-transcribe">GPT-4o Mini Transcribe</option>
+          <select
+            id="openai-model-select"
+            class="select select-bordered w-full max-w-xs"
+            bind:value={$openaiModel}
+          >
+            <option value="gpt-4o-mini-transcribe"
+              >GPT-4o Mini Transcribe</option
+            >
             <option value="gpt-4o-transcribe">GPT-4o Transcribe</option>
           </select>
-           <label class="label">
-             <span class="label-text-alt">Select the Whisper model to use.</span>
+          <label class="label">
+            <span class="label-text-alt">Select the Whisper model to use.</span>
           </label>
         </div>
       {/if}
 
-      {#if $provider === 'deepgram'}
+      {#if $provider === "deepgram"}
         <div class="form-control">
           <label class="label" for="deepgram-api-key">
             <span class="label-text">Deepgram API Key</span>
@@ -4418,7 +4363,13 @@ File: src/renderer/src/components/settings/Transcription.svelte
             bind:value={$deepgramApiKey}
           />
           <label class="label">
-             <span class="label-text-alt">Required for Deepgram transcription. Get key from <a href="https://console.deepgram.com/signup" target="_blank" class="link link-primary">Deepgram Console</a>.</span>
+            <span class="label-text-alt"
+              >Required for Deepgram transcription. Get key from <a
+                href="https://console.deepgram.com/signup"
+                target="_blank"
+                class="link link-primary">Deepgram Console</a
+              >.</span
+            >
           </label>
         </div>
 
@@ -4426,54 +4377,21 @@ File: src/renderer/src/components/settings/Transcription.svelte
           <label class="label" for="deepgram-model-select">
             <span class="label-text">Deepgram Model</span>
           </label>
-          <select id="deepgram-model-select" class="select select-bordered w-full max-w-xs" bind:value={$deepgramModel}>
+          <select
+            id="deepgram-model-select"
+            class="select select-bordered w-full max-w-xs"
+            bind:value={$deepgramModel}
+          >
             <option value="nova-3">Nova 3 (Best)</option>
             <option value="enhanced">Enhanced</option>
             <option value="whisper-large">Whisper Large</option>
           </select>
-           <label class="label">
-             <span class="label-text-alt">Select the Deepgram model to use.</span>
+          <label class="label">
+            <span class="label-text-alt">Select the Deepgram model to use.</span
+            >
           </label>
         </div>
       {/if}
-
-      {#if $provider === 'local'}
-         <div class="form-control w-full max-w-md space-y-4">
-            <div>
-                <label class="label" for="local-model-select">
-                <span class="label-text">Local Whisper Model</span>
-                <span class="label-text-alt">Models are downloaded on demand.</span>
-                </label>
-                <select
-                id="local-model-select"
-                class="select select-bordered w-full"
-                bind:value={$localModelName}
-                >
-                {#each availableLocalModels as model}
-                    <option value={model.value}>{model.label}</option>
-                {/each}
-                </select>
-                <label class="label">
-                    <span class="label-text-alt">Larger models are more accurate but slower and require more resources. `.en` models are English-only.</span>
-                </label>
-            </div>
-
-            <div>
-                <button class="btn btn-secondary btn-sm" on:click={downloadModel} disabled={!$localModelName}>
-                    Download/Verify Model: {$localModelName || 'Select Model'}
-                </button>
-                {#if $downloadStatus}
-                    <p class="text-sm mt-2">{$downloadStatus}</p>
-                {/if}
-                <p class="text-xs text-base-content/70 mt-1">
-                    Clicking download will fetch the selected model if it's not already present locally.
-                    This uses the `npx nodejs-whisper download` command.
-                    Check console/logs for detailed progress.
-                </p>
-            </div>
-         </div>
-      {/if}
-
     </div>
   {/if}
 </div>
@@ -4963,18 +4881,19 @@ export function get<T>(store: { subscribe: (cb: (value: T) => void) => () => voi
 File: src/renderer/src/App.svelte
 ================
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import AppLayout from './components/layout/AppLayout.svelte';
-  import Dashboard from './components/settings/Dashboard.svelte';
-  import Dictionary from './components/settings/Dictionary.svelte';
-  import History from './components/settings/History.svelte';
-  import Enhancements from './components/settings/Enhancements.svelte';
-  import Permissions from './components/settings/Permissions.svelte';
-  import Shortcuts from './components/settings/Shortcuts.svelte';
-  import Transcription from './components/settings/Transcription.svelte';
-  import { initializeAudioRecorder } from './lib/audioRecorder';
+  import { onMount, onDestroy } from "svelte";
+  import AppLayout from "./components/layout/AppLayout.svelte";
+  import Dashboard from "./components/settings/Dashboard.svelte";
+  import Logs from "./components/settings/Logs.svelte";
+  import Dictionary from "./components/settings/Dictionary.svelte";
+  import History from "./components/settings/History.svelte";
+  import Enhancements from "./components/settings/Enhancements.svelte";
+  import Permissions from "./components/settings/Permissions.svelte";
+  import Shortcuts from "./components/settings/Shortcuts.svelte";
+  import Transcription from "./components/settings/Transcription.svelte";
+  import { initializeAudioRecorder } from "./lib/audioRecorder";
 
-  let activePage = 'dashboard';
+  let activePage = "dashboard";
 
   let cleanupAudioRecorder: (() => void) | null = null;
 
@@ -4990,20 +4909,22 @@ File: src/renderer/src/App.svelte
 </script>
 
 <AppLayout bind:activePage>
-  {#if activePage === 'dashboard'}
+  {#if activePage === "dashboard"}
     <Dashboard />
-  {:else if activePage === 'shortcuts'}
+  {:else if activePage === "shortcuts"}
     <Shortcuts />
-  {:else if activePage === 'transcription'}
+  {:else if activePage === "transcription"}
     <Transcription />
-  {:else if activePage === 'enhancements'}
+  {:else if activePage === "enhancements"}
     <Enhancements />
-  {:else if activePage === 'dictionary'}
+  {:else if activePage === "dictionary"}
     <Dictionary />
-  {:else if activePage === 'permissions'}
+  {:else if activePage === "permissions"}
     <Permissions />
-  {:else if activePage === 'history'}
+  {:else if activePage === "history"}
     <History />
+  {:else if activePage === "logs"}
+    <Logs />
   {/if}
 </AppLayout>
 
@@ -5452,126 +5373,6 @@ File: package.json
     "vite": "^6.2.3"
   }
 }
-
-================
-File: plan.md
-================
-# Vox Transcriber Application Plan
-
-## TODO
-Hide widget window when not recording Make sure you can't, if you click on it, something happens in the app, not that you go to the other app Add escape to cancel current transcription Add enhancements prompt to better wave animation
-
-## I. Project Goal
-
-Create an Electron desktop application named "Vox" that:
-*   Transcribes audio input using a configurable backend (initially `nodejs-whisper`, with future support for a Whisper API).
-*   Supports push-to-talk and toggle recording via configurable global keyboard shortcuts (using a native helper for macOS modifier keys).
-*   Pastes the transcribed text into the currently active application (system-wide).
-*   Optionally enhances the transcription using LLMs (Gemini, OpenAI, Custom).
-*   Provides a settings interface built with Svelte, Tailwind CSS (v4), and DaisyUI (v5) for managing shortcuts, transcription backend, LLM enhancements, custom dictionary, permissions, and viewing history.
-
-## II. Technology Stack
-
-*   **Framework:** Electron
-*   **UI:** Svelte
-*   **Styling:** Tailwind CSS v4, DaisyUI v5
-*   **Transcription Backend (Initial):** `nodejs-whisper` (Node.js native addon)
-*   **Transcription Backend (Alternative option):** Whisper API (via HTTP requests)
-*   **Global Shortcuts (macOS):** Custom Swift helper tool (`key-monitor`) using `CGEventTap`, managed via `child_process`. Requires Accessibility permissions.
-*   **System Paste:** Electron's `clipboard` API + `robotjs` or platform-specific scripts.
-*   **State Management:** Svelte Stores (for UI state), simple state management in Main Process.
-*   **Audio Recording:** A Node.js compatible library (e.g., `node-audiorecorder`).
-*   **Settings Storage:** `electron-store`
-*   **Logging:** `electron-log`
-
-## III. High-Level Architecture (with Abstraction)
-
-```mermaid
-graph TD
-    subgraph Electron Main Process
-        subgraph macOS Shortcut Handling
-            direction TB
-            Z[key-monitor Process (Swift)] -- stdout (KEY_DOWN/UP) --> A;
-        end
-        A[Shortcut Event Handler] --> B{Transcription Manager};
-        G[Settings Storage] --> B;
-        B -- Reads Setting --> Selects((Transcription Mode));
-        Selects -- Local --> D[LocalWhisperService (nodejs-whisper)];
-        Selects -- API --> L[ApiWhisperService (Future)];
-        B -- Delegates to --> K{Active Transcription Service};
-        D --> K;
-        L --> K;
-        B --> C[Audio Recorder (Node.js)];
-        C -- Audio Data --> K;
-        K -- Transcribed Text --> B;
-        B --> E[System Paste Handler];
-        B --> F[Permissions Manager];
-        G --> H[LLM API Handler];
-        H --> B;
-        B -- Status Updates / Text --> I(Renderer Process);
-        E -- Paste Command --> J[OS Clipboard/Input];
-        F -- Request Permissions (Mic, Accessibility, Screen Recording) --> M[OS Permissions];
-        F -- Starts/Stops --> Z;
-        F -- Reads Settings --> Z;
-    end
-
-    subgraph Electron Renderer Process (Svelte UI)
-        I -- Display Data --> N[Svelte App];
-        N -- Settings Changes (incl. Shortcut Keys, Transcription Mode & API details) --> G;
-        N -- Request Permission --> F;
-        N -- Update Monitored Keys --> A;
-        N -- UI Events (e.g., manual start/stop) --> B;
-        N -- Display Status/History/Permissions --> O[UI Components];
-    end
-
-    style Electron Main Process fill:#f9f,stroke:#333,stroke-width:2px
-    style Electron Renderer Process fill:#ccf,stroke:#333,stroke-width:2px
-```
-
-**Architecture Notes:**
-*   The `Transcription Manager` in the main process selects the active `Transcription Service`.
-*   Audio recording and transcription logic reside primarily in the main process.
-*   **macOS Shortcut Handling:** A separate Swift process (`key-monitor`) monitors low-level modifier key events and communicates via stdout to the main Electron process (`Shortcut Event Handler`), which implements click/hold/double-click logic. This requires Accessibility permissions for the `key-monitor` executable.
-*   The renderer process (Svelte UI) handles displaying information and configuring settings via IPC.
-
-## IV. Detailed Plan
-
-1.  **Phase 1: Project Setup & Core Dependencies [COMPLETED]**
-    *   Initialize Svelte, Tailwind CSS v4, DaisyUI v5.
-    *   Install `nodejs-whisper` (requires build tools).
-    *   Install `robotjs` (or alternative) for system paste simulation.
-    *   Install `electron-store`.
-    *   Install `electron-log`.
-    *   Refine `index.js` and `preload.js` for secure IPC.
-
-2.  **Phase 2: Transcription Core (Main Process)**
-    *   Define `TranscriptionService` interface.
-    *   Implement `OpenaiWhisperService` using `openai` package.
-    *   Implement audio input/recording via Web Audio API (navigator.mediaDevices.getUserMedia)
-    *   Implement `Transcription Manager` to select and use the active service based on settings.
-    *   Establish IPC for status updates, results, and settings.
-    *   Implement recording start/stop on shortcut press/release
-
-3.  **Phase 3: Current Work - OpenAI Whisper API Integration**
-    *   Stream audio to OpenAI Whisper API
-    *   Handle API responses and display transcription
-    *   Implement system paste of transcribed text
-
-4.  **Phase 4: Local Whisper Service & Enhancements**
-    *   Implement `LocalWhisperService` using `nodejs-whisper`
-    *   Add LLM API calls for text enhancement
-    *   Integrate enhancement into transcription flow
-    *   Implement history storage using `electron-store`
-
-5.  **Phase 5: Refinement & Packaging**
-    *   Add error handling
-    *   Optimize performance
-    *   Test thoroughly on macOS
-    *   Configure Electron Forge/Builder for packaging
-
-## V. Future Considerations
-*   Add features utilizing screen recording permission (e.g., screenshot capture).
-*   Implement cross-platform global shortcuts using Electron's `globalShortcut`.
 
 ================
 File: README.md

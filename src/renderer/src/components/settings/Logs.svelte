@@ -23,7 +23,7 @@
   });
 
   onDestroy(() => {
-    clearTimeout(copyTimeout); // Clear timeout on component destroy
+    clearTimeout(copyTimeout);
   });
 
   async function refreshLogs() {
@@ -67,7 +67,7 @@
      </button>
   </div>
 
-  <div class="bg-base-200 p-4 rounded-md font-mono text-xs overflow-auto h-96">
+  <div class="bg-base-200 p-4 rounded-md font-mono text-xs overflow-auto h-96 select-text">
     {#if $isLoading}
       <p>Loading logs...</p>
     {:else}

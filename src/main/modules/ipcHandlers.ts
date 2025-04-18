@@ -1,5 +1,5 @@
 import Mustache from 'mustache';
-import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron';
+import { ipcMain, systemPreferences, shell, clipboard } from 'electron';
 import { exec } from 'child_process';
 import fs from 'fs/promises';
 import log from 'electron-log';
