@@ -588,7 +588,7 @@ export class OpenaiEnhancementService implements EnhancementService {
     const finalPrompt = Mustache.render(promptTemplate, contextData);
     logger.debug(`Final rendered prompt: ${finalPrompt.substring(0, 100)}...`);
 
-    logger.info(`Sending enhancement request to OpenAI model ${model}...`);
+    logger.info(`Sending enhancement request to model ${model}...`);
 
     try {
       const completion = await openai.chat.completions.create({
@@ -710,6 +710,11 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('clearAllHistory', () => {
          logger.info(`IPC: Received request to clear all history`);
          return historyService.clearAllHistory();
+    });
+
+    ipcMain.handle('getAvailableLocalModels', () => {
+        logger.info('IPC: Received request for available local models.');
+        return AVAILABLE_LOCAL_MODELS;
     });
 
     ipcMain.handle('download-local-model', async (_event, modelName: string): Promise<void> => {
@@ -1587,11 +1592,12 @@ export class LocalWhisperService implements TranscriptionService {
       logger.info(`Local transcription GPU (Metal) usage: ${useGpu}`);
 
       const options: IOptions = {
+        // execPath: process.execPath, // Reverted: Not a valid option in IOptions
         modelName: selectedModel,
         whisperOptions: whisperOptions,
       };
 
-      const loggableOptions = { ...options, logger: undefined, whisperOptions };
+      const loggableOptions = { ...options, logger: undefined, whisperOptions }; // Reverted logging change
       logger.info(`Calling nodejs-whisper with options: ${JSON.stringify(loggableOptions)}`);
 
       options.whisperOptions!.outputInText = true;
@@ -1642,14 +1648,21 @@ export class LocalWhisperService implements TranscriptionService {
       logger.info(`Attempting to download local model: ${modelName}...`);
       try {
           const { exec } = await import('child_process');
+          // NOTE: This approach of shelling out to npx might still be problematic in packaged apps.
+          // A more robust solution might involve bundling whisper.cpp differently or
+          // using a library that manages the binary execution better within Electron.
           const command = `npx nodejs-whisper download ${modelName}`;
-          logger.info(`Executing command: ${command}`);
+          logger.info(`Executing command: ${command} with execPath context: ${process.execPath}`);
 
           await new Promise<void>((resolve, reject) => {
-              const process = exec(command, (error, stdout, stderr) => {
+              // Pass environment options, potentially including execPath's directory in PATH
+              const env = { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH}` };
+              const childProcess = exec(command, { env }, (error, stdout, stderr) => {
                   if (error) {
                       logger.error(`Error downloading model ${modelName}: ${error.message}`);
                       logger.error(`stderr: ${stderr}`);
+                      // Include stdout in error if helpful
+                      logger.error(`stdout: ${stdout}`);
                       reject(error);
                       return;
                   }
@@ -2465,7 +2478,9 @@ declare global {
       clearAllHistory: () => Promise<boolean>,
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
-      getDefaultPromptContent: () => Promise<string>
+      getDefaultPromptContent: () => Promise<string>;
+      getAvailableLocalModels: () => Promise<string[]>;
+      downloadLocalModel: (modelName: string) => Promise<void>;
     }
   }
 }
@@ -2554,6 +2569,8 @@ const api = {
   clearAllHistory: (): Promise<boolean> => ipcRenderer.invoke('clearAllHistory'),
   notifySilenceCancellation: (): void => ipcRenderer.send('processing-cancelled-silence'),
   getDefaultPromptContent: (): Promise<string> => ipcRenderer.invoke('getDefaultPromptContent'),
+  getAvailableLocalModels: (): Promise<string[]> => ipcRenderer.invoke('getAvailableLocalModels'),
+  downloadLocalModel: (modelName: string): Promise<void> => ipcRenderer.invoke('download-local-model', modelName),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
 };
 
@@ -2565,7 +2582,9 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
+  // @ts-ignore (define in dts)
   window.electron = electronAPI
+  // @ts-ignore (define in dts)
   window.api = api
 }
 
@@ -4124,8 +4143,6 @@ File: src/renderer/src/components/settings/Shortcuts.svelte
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
 
-  // Define the available modifier keys for the UI and their mapping to the names
-  // the Swift tool and main process expect.
   const availableKeys = [
     { id: 'Fn', label: 'Fn', mapped: 'FN' }, // FN key is often problematic for global monitoring
     { id: 'ControlLeft', label: 'Control', mapped: 'CONTROL' }, // Use generic CONTROL
@@ -4272,97 +4289,140 @@ File: src/renderer/src/components/settings/Shortcuts.svelte
 File: src/renderer/src/components/settings/Transcription.svelte
 ================
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { writable, get } from 'svelte/store';
-  import { AVAILABLE_LOCAL_MODELS } from '../../../../main/transcription/LocalWhisperService'
+  import { onMount } from "svelte";
+  import { writable, get } from "svelte/store";
 
-  const openaiApiKey = writable('');
-  const openaiModel = writable<'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe'>('gpt-4o-mini-transcribe');
-  const provider = writable<'openai' | 'deepgram' | 'local'>('openai');
-  const deepgramApiKey = writable('');
-  const deepgramModel = writable<'nova-3' | 'enhanced' | 'whisper-large'>('nova-3');
-  const localModelName = writable<string>('base.en');
+  const openaiApiKey = writable("");
+  const openaiModel = writable<"gpt-4o-mini-transcribe" | "gpt-4o-transcribe">(
+    "gpt-4o-mini-transcribe",
+  );
+  const provider = writable<"openai" | "deepgram" | "local">("openai");
+  const deepgramApiKey = writable("");
+  const deepgramModel = writable<"nova-3" | "enhanced" | "whisper-large">(
+    "nova-3",
+  );
+  const localModelName = writable<string>("base");
+
+  const availableLocalModelsStore = writable<
+    { value: string; label: string }[]
+  >([]); // Store for models
 
   let isLoading = true;
-  let downloadStatus = writable('');
+  let downloadStatus = writable("");
 
   onMount(async () => {
     try {
-      const initialSettings = await window.api.getStoreValue('transcription') as any || {}; 
+      const initialSettingsPromise = window.api.getStoreValue(
+        "transcription",
+      ) as Promise<any | undefined>;
+      const modelsPromise = window.api.getAvailableLocalModels();
 
-      provider.set(initialSettings.provider || 'openai');
-      openaiApiKey.set(initialSettings.openaiApiKey || '');
-      openaiModel.set(initialSettings.openaiModel || 'gpt-4o-mini-transcribe');
-      deepgramApiKey.set(initialSettings.deepgramApiKey || '');
-      deepgramModel.set(initialSettings.deepgramModel || 'nova-3');
-      localModelName.set(initialSettings.localModelName || 'base');
+      const [initialSettings, models] = await Promise.all([
+        initialSettingsPromise,
+        modelsPromise,
+      ]);
 
+      provider.set(initialSettings.provider || "openai");
+      openaiApiKey.set(initialSettings.openaiApiKey || "");
+      openaiModel.set(initialSettings.openaiModel || "gpt-4o-mini-transcribe");
+      deepgramApiKey.set(initialSettings.deepgramApiKey || "");
+      deepgramModel.set(initialSettings.deepgramModel || "nova-3");
+      localModelName.set(initialSettings.localModelName || "base");
+
+      if (models && Array.isArray(models)) {
+        availableLocalModelsStore.set(
+          models.map((model) => ({ value: model, label: model })),
+        );
+        window.api.log("info", "Loaded available local models via API.");
+      } else {
+        window.api.log(
+          "warn",
+          "Could not load available local models via API.",
+        );
+        availableLocalModelsStore.set([]);
+      }
     } catch (error) {
-      window.api.log('error', 'Failed to load transcription settings:', error);
+      window.api.log("error", "Failed to load transcription settings:", error);
     } finally {
       isLoading = false;
     }
-
   });
 
   let saveTimeout: NodeJS.Timeout | null = null;
   const saveSettings = () => {
-      if (isLoading) return;
-      if (saveTimeout) clearTimeout(saveTimeout);
+    if (isLoading) return;
+    if (saveTimeout) clearTimeout(saveTimeout);
 
-      const currentSettings = {
-          provider: get(provider),
-          openaiApiKey: get(openaiApiKey),
-          openaiModel: get(openaiModel),
-          deepgramApiKey: get(deepgramApiKey),
-          deepgramModel: get(deepgramModel),
-          localModelName: get(localModelName)
-      };
+    const currentSettings = {
+      provider: get(provider),
+      openaiApiKey: get(openaiApiKey),
+      openaiModel: get(openaiModel),
+      deepgramApiKey: get(deepgramApiKey),
+      deepgramModel: get(deepgramModel),
+      localModelName: get(localModelName),
+    };
 
-      saveTimeout = setTimeout(async () => {
-          try {
-              await window.api.setStoreValue('transcription', currentSettings);
-              window.api.log('info', 'Transcription settings auto-saved.');
-          } catch (error) {
-              window.api.log('error', 'Failed to auto-save transcription settings:', error);
-          }
-      }, 500);
+    saveTimeout = setTimeout(async () => {
+      try {
+        await window.api.setStoreValue("transcription", currentSettings);
+        window.api.log("info", "Transcription settings auto-saved.");
+      } catch (error) {
+        window.api.log(
+          "error",
+          "Failed to auto-save transcription settings:",
+          error,
+        );
+      }
+    }, 500);
   };
 
   $: if (!isLoading) {
-      const currentProviderValue = $provider;
-      const currentApiKeyValue = $openaiApiKey;
-      const currentModelValue = $openaiModel;
-      const currentDeepgramApiKeyValue = $deepgramApiKey;
-      const currentDeepgramModelValue = $deepgramModel;
-      const currentLocalModelValue = $localModelName;
+    const currentProviderValue = $provider;
+    const currentApiKeyValue = $openaiApiKey;
+    const currentModelValue = $openaiModel;
+    const currentDeepgramApiKeyValue = $deepgramApiKey;
+    const currentDeepgramModelValue = $deepgramModel;
+    const currentLocalModelValue = $localModelName;
 
-      saveSettings();
-      if (currentProviderValue !== 'local' || (currentProviderValue === 'local' && currentLocalModelValue)) {
-          downloadStatus.set('');
-      }
+    saveSettings();
+    if (
+      currentProviderValue !== "local" ||
+      (currentProviderValue === "local" && currentLocalModelValue)
+    ) {
+      downloadStatus.set("");
+    }
   }
-
-  const availableLocalModels = AVAILABLE_LOCAL_MODELS.map(model => ({ value: model, label: model }));
 
   async function downloadModel() {
-      const modelToDownload = get(localModelName);
-      if (!modelToDownload) {
-          downloadStatus.set('Please select a model first.');
-          return;
-      }
-      downloadStatus.set(`Downloading model ${modelToDownload}... (This may take a while)`);
-      window.api.log('info', `Requesting download for model: ${modelToDownload}`);
-      try {
-          await window.api.invoke('download-local-model', modelToDownload);
-          downloadStatus.set(`Model ${modelToDownload} downloaded successfully (or already exists).`);
-          window.api.log('info', `Model download request successful for: ${modelToDownload}`);
-      } catch (error: any) {
-          window.api.log('error', `Failed to download model ${modelToDownload}:`, error);
-          downloadStatus.set(`Error downloading model: ${error.message || 'Unknown error'}`);
-      }
+    const modelToDownload = get(localModelName);
+    if (!modelToDownload) {
+      downloadStatus.set("Please select a model first.");
+      return;
+    }
+    downloadStatus.set(
+      `Downloading model ${modelToDownload}... (This may take a while)`,
+    );
+    window.api.log("info", `Requesting download for model: ${modelToDownload}`);
+    try {
+      await window.api.downloadLocalModel(modelToDownload);
+      downloadStatus.set(
+        `Model ${modelToDownload} downloaded successfully (or already exists).`,
+      );
+      window.api.log(
+        "info",
+        `Model download request successful for: ${modelToDownload}`,
+      );
+    } catch (error: any) {
+      window.api.log(
+        "error",
+        `Failed to download model ${modelToDownload}:`,
+        error,
+      );
+      downloadStatus.set(
+        `Error downloading model: ${error.message || "Unknown error"}`,
+      );
+    }
   }
-
 </script>
 
 <div class="p-4 space-y-6">
@@ -4372,19 +4432,23 @@ File: src/renderer/src/components/settings/Transcription.svelte
     <p>Loading settings...</p>
   {:else}
     <div class="space-y-4">
-       <!-- Provider Selection -->
-       <div class="form-control">
-         <label class="label" for="provider-select">
-           <span class="label-text">Transcription Provider</span>
-         </label>
-         <select id="provider-select" class="select select-bordered w-full max-w-xs" bind:value={$provider}>
-           <option value="openai">OpenAI Whisper API</option>
-           <option value="deepgram">Deepgram API</option>
-           <option value="local">Local Whisper Model</option> 
-         </select>
-       </div>
+      <!-- Provider Selection -->
+      <div class="form-control">
+        <label class="label" for="provider-select">
+          <span class="label-text">Transcription Provider</span>
+        </label>
+        <select
+          id="provider-select"
+          class="select select-bordered w-full max-w-xs"
+          bind:value={$provider}
+        >
+          <option value="openai">OpenAI Whisper API</option>
+          <option value="deepgram">Deepgram API</option>
+          <option value="local">Local Whisper Model</option>
+        </select>
+      </div>
 
-      {#if $provider === 'openai'}
+      {#if $provider === "openai"}
         <div class="form-control">
           <label class="label" for="openai-api-key">
             <span class="label-text">OpenAI API Key (for Transcription)</span>
@@ -4397,7 +4461,13 @@ File: src/renderer/src/components/settings/Transcription.svelte
             bind:value={$openaiApiKey}
           />
           <label class="label">
-             <span class="label-text-alt">Required for OpenAI transcription. Get key from <a href="https://platform.openai.com/api-keys" target="_blank" class="link link-primary">OpenAI Platform</a>.</span>
+            <span class="label-text-alt"
+              >Required for OpenAI transcription. Get key from <a
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                class="link link-primary">OpenAI Platform</a
+              >.</span
+            >
           </label>
         </div>
 
@@ -4405,17 +4475,23 @@ File: src/renderer/src/components/settings/Transcription.svelte
           <label class="label" for="openai-model-select">
             <span class="label-text">OpenAI Whisper Model</span>
           </label>
-          <select id="openai-model-select" class="select select-bordered w-full max-w-xs" bind:value={$openaiModel}>
-            <option value="gpt-4o-mini-transcribe">GPT-4o Mini Transcribe</option>
+          <select
+            id="openai-model-select"
+            class="select select-bordered w-full max-w-xs"
+            bind:value={$openaiModel}
+          >
+            <option value="gpt-4o-mini-transcribe"
+              >GPT-4o Mini Transcribe</option
+            >
             <option value="gpt-4o-transcribe">GPT-4o Transcribe</option>
           </select>
-           <label class="label">
-             <span class="label-text-alt">Select the Whisper model to use.</span>
+          <label class="label">
+            <span class="label-text-alt">Select the Whisper model to use.</span>
           </label>
         </div>
       {/if}
 
-      {#if $provider === 'deepgram'}
+      {#if $provider === "deepgram"}
         <div class="form-control">
           <label class="label" for="deepgram-api-key">
             <span class="label-text">Deepgram API Key</span>
@@ -4428,7 +4504,13 @@ File: src/renderer/src/components/settings/Transcription.svelte
             bind:value={$deepgramApiKey}
           />
           <label class="label">
-             <span class="label-text-alt">Required for Deepgram transcription. Get key from <a href="https://console.deepgram.com/signup" target="_blank" class="link link-primary">Deepgram Console</a>.</span>
+            <span class="label-text-alt"
+              >Required for Deepgram transcription. Get key from <a
+                href="https://console.deepgram.com/signup"
+                target="_blank"
+                class="link link-primary">Deepgram Console</a
+              >.</span
+            >
           </label>
         </div>
 
@@ -4436,54 +4518,72 @@ File: src/renderer/src/components/settings/Transcription.svelte
           <label class="label" for="deepgram-model-select">
             <span class="label-text">Deepgram Model</span>
           </label>
-          <select id="deepgram-model-select" class="select select-bordered w-full max-w-xs" bind:value={$deepgramModel}>
+          <select
+            id="deepgram-model-select"
+            class="select select-bordered w-full max-w-xs"
+            bind:value={$deepgramModel}
+          >
             <option value="nova-3">Nova 3 (Best)</option>
             <option value="enhanced">Enhanced</option>
             <option value="whisper-large">Whisper Large</option>
           </select>
-           <label class="label">
-             <span class="label-text-alt">Select the Deepgram model to use.</span>
+          <label class="label">
+            <span class="label-text-alt">Select the Deepgram model to use.</span
+            >
           </label>
         </div>
       {/if}
 
-      {#if $provider === 'local'}
-         <div class="form-control w-full max-w-md space-y-4">
-            <div>
-                <label class="label" for="local-model-select">
-                <span class="label-text">Local Whisper Model</span>
-                <span class="label-text-alt">Models are downloaded on demand.</span>
-                </label>
-                <select
-                id="local-model-select"
-                class="select select-bordered w-full"
-                bind:value={$localModelName}
+      {#if $provider === "local"}
+        <div class="form-control w-full max-w-md space-y-4">
+          <div>
+            <label class="label" for="local-model-select">
+              <span class="label-text">Local Whisper Model</span>
+              <span class="label-text-alt"
+                >Models are downloaded on demand.</span
+              >
+            </label>
+            <select
+              id="local-model-select"
+              class="select select-bordered w-full"
+              bind:value={$localModelName}
+              disabled={$availableLocalModelsStore.length === 0}
+            >
+              {#if $availableLocalModelsStore.length === 0 && !isLoading}
+                <option value="" disabled selected>Could not load models</option
                 >
-                {#each availableLocalModels as model}
-                    <option value={model.value}>{model.label}</option>
-                {/each}
-                </select>
-                <label class="label">
-                    <span class="label-text-alt">Larger models are more accurate but slower and require more resources. `.en` models are English-only.</span>
-                </label>
-            </div>
+              {/if}
+              {#each $availableLocalModelsStore as model}
+                <option value={model.value}>{model.label}</option>
+              {/each}
+            </select>
+            <label class="label">
+              <span class="label-text-alt"
+                >Larger models are more accurate but slower and require more
+                resources. `.en` models are English-only.</span
+              >
+            </label>
+          </div>
 
-            <div>
-                <button class="btn btn-secondary btn-sm" on:click={downloadModel} disabled={!$localModelName}>
-                    Download/Verify Model: {$localModelName || 'Select Model'}
-                </button>
-                {#if $downloadStatus}
-                    <p class="text-sm mt-2">{$downloadStatus}</p>
-                {/if}
-                <p class="text-xs text-base-content/70 mt-1">
-                    Clicking download will fetch the selected model if it's not already present locally.
-                    This uses the `npx nodejs-whisper download` command.
-                    Check console/logs for detailed progress.
-                </p>
-            </div>
-         </div>
+          <div>
+            <button
+              class="btn btn-secondary btn-sm"
+              on:click={downloadModel}
+              disabled={!$localModelName}
+            >
+              Download/Verify Model: {$localModelName || "Select Model"}
+            </button>
+            {#if $downloadStatus}
+              <p class="text-sm mt-2">{$downloadStatus}</p>
+            {/if}
+            <p class="text-xs text-base-content/70 mt-1">
+              Clicking download will fetch the selected model if it's not
+              already present locally. This uses the `npx nodejs-whisper
+              download` command. Check console/logs for detailed progress.
+            </p>
+          </div>
+        </div>
       {/if}
-
     </div>
   {/if}
 </div>

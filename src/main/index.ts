@@ -1,4 +1,4 @@
-import { app, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
@@ -9,11 +9,28 @@ import { EnhancementManager } from './enhancement/EnhancementManager';
 import * as WindowManager from './modules/windowManager';
 import * as ShortcutManager from './modules/shortcutManager';
 import * as IpcHandlers from './modules/ipcHandlers';
+import { EventEmitter } from 'events';
+
+// Central status emitter
+export const statusEmitter = new EventEmitter();
 
 let tray: Tray | null = null;
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
 let processingCancelledByEscape = false;
+
+export function sendRecordingStatus(status: 'idle' | 'recording' | 'processing' | 'error'): void {
+    logger.info(`Updating status to: ${status}`);
+    processingCancelledByEscape = status === 'error';
+
+    // Emit the status update event
+    statusEmitter.emit('status-update', status);
+
+    // WindowManager still needs direct calls for now, will be refactored
+    WindowManager.sendToMain('status-update', status);
+    WindowManager.sendToWidget('widget-status-update', status);
+    WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
+}
 
 app.whenReady().then(async () => {
     logger.info('App ready, initializing...');
@@ -31,15 +48,6 @@ app.whenReady().then(async () => {
     transcriptionManager = new TranscriptionManager();
     enhancementManager = new EnhancementManager();
     logger.info('Core managers (Transcription, Enhancement) initialized.');
-
-    const sendRecordingStatus = (status: 'idle' | 'recording' | 'processing' | 'error'): void => {
-        logger.info(`[Main] Sending status update: ${status}`);
-        ShortcutManager.updateMainProcessStatus(status);
-        IpcHandlers.updateIpcHandlerStatus(status);
-        WindowManager.sendToMain('recording-status', status);
-        WindowManager.sendToWidget('widget-status-update', status);
-        WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
-    };
 
     const sendRawShortcutAction = (action: string, keyName: string): void => {
         WindowManager.sendToMain('shortcutAction', action, keyName);
@@ -70,7 +78,6 @@ app.whenReady().then(async () => {
     };
 
     ShortcutManager.initializeShortcutManager({
-        sendRecordingStatus,
         sendRawShortcutAction,
         startRecording,
         stopRecording,
@@ -83,7 +90,6 @@ app.whenReady().then(async () => {
         enhancementManager,
         getProcessingCancelledFlag,
         setProcessingCancelledFlag,
-        sendRecordingStatus,
     });
 
     IpcHandlers.setupIpcHandlers();

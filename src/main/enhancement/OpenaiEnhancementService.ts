@@ -47,7 +47,7 @@ export class OpenaiEnhancementService implements EnhancementService {
     const finalPrompt = Mustache.render(promptTemplate, contextData);
     logger.debug(`Final rendered prompt: ${finalPrompt.substring(0, 100)}...`);
 
-    logger.info(`Sending enhancement request to OpenAI model ${model}...`);
+    logger.info(`Sending enhancement request to model ${model}...`);
 
     try {
       const completion = await openai.chat.completions.create({

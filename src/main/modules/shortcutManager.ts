@@ -2,6 +2,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { app } from 'electron';
 import path from 'path';
 import { logger } from '../logger';
+import { statusEmitter } from '../index'; // Import the emitter
 
 export enum ShortcutState {
     IDLE,
@@ -22,28 +23,34 @@ let ignoreNextUpInToggle = false;
 const HOLD_DURATION_THRESHOLD = 500;
 const DOUBLE_CLICK_WINDOW = 500;
 
-let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 let _sendRawShortcutAction: (action: string, keyName: string) => void = () => {};
 let _startRecording: () => void = () => {};
 let _stopRecording: () => void = () => {};
 let _cancelRecording: () => void = () => {};
 let _notifyProcessingCancelledByEscape: () => void = () => {};
 
+let currentAppStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle'; // Local status variable
+
 export function initializeShortcutManager(dependencies: {
-    sendRecordingStatus: typeof _sendRecordingStatus;
     sendRawShortcutAction: typeof _sendRawShortcutAction;
     startRecording: typeof _startRecording;
     stopRecording: typeof _stopRecording;
     cancelRecording: typeof _cancelRecording;
     notifyProcessingCancelledByEscape: typeof _notifyProcessingCancelledByEscape;
 }): void {
-    _sendRecordingStatus = dependencies.sendRecordingStatus;
     _sendRawShortcutAction = dependencies.sendRawShortcutAction;
     _startRecording = dependencies.startRecording;
     _stopRecording = dependencies.stopRecording;
     _cancelRecording = dependencies.cancelRecording;
     _notifyProcessingCancelledByEscape = dependencies.notifyProcessingCancelledByEscape;
-    logger.info('Shortcut Manager initialized with dependencies.');
+
+    // Subscribe to status updates
+    statusEmitter.on('status-update', (status: typeof currentAppStatus) => {
+        logger.debug(`ShortcutManager received status update via emitter: ${status}`);
+        currentAppStatus = status;
+    });
+
+    logger.info('Shortcut Manager initialized and subscribed to status updates.');
 }
 
 function resetShortcutState(): void {
@@ -73,20 +80,17 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 currentState = ShortcutState.TOGGLE_RECORDING;
                 ignoreNextUpInToggle = true;
                 _startRecording();
-                _sendRecordingStatus('recording');
             } else {
                 logger.debug(`Second click on ${keyName} too late. Treating as new press.`);
                 currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
                 keyDownTime = now;
                 _startRecording();
-                _sendRecordingStatus('recording');
             }
         } else if (currentState === ShortcutState.IDLE) {
             logger.debug(`Key Down ${keyName} - Starting immediate recording (Potential Click/Hold).`);
             currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
             keyDownTime = now;
             _startRecording();
-            _sendRecordingStatus('recording');
         } else {
             logger.debug(`Ignoring duplicate Key Down ${keyName} in state ${ShortcutState[currentState]}.`);
         }
@@ -113,7 +117,6 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                     if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
                         logger.debug(`Double click timeout expired for ${keyName}. Confirmed single click (ignored). Resetting to IDLE.`);
                         resetShortcutState();
-                        _sendRecordingStatus('idle');
                     }
                 }, DOUBLE_CLICK_WINDOW);
 
@@ -121,7 +124,6 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 logger.info(`Hold Released ${keyName}. Stopping PTT Recording.`);
                 _sendRawShortcutAction('holdEnd', keyName);
                 _stopRecording();
-                _sendRecordingStatus('processing');
                 resetShortcutState();
             }
         } else if (currentState === ShortcutState.TOGGLE_RECORDING) {
@@ -132,7 +134,6 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
                 logger.info(`Stopping Toggle Recording due to UP event.`);
                 _sendRawShortcutAction('toggleStop', keyName);
                 _stopRecording();
-                _sendRecordingStatus('processing');
                 resetShortcutState();
             }
         } else {
@@ -143,22 +144,18 @@ function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
 
 function handleEscapeKey(): void {
     logger.info('Escape key pressed (from Swift).');
-    const currentStatus = mainProcessRecordingStatus;
 
-    if (currentStatus === 'recording') {
+    if (currentAppStatus === 'recording') {
         logger.info('🔴 Cancelling active recording via Escape key.');
         _cancelRecording();
         resetShortcutState();
-        _sendRecordingStatus('idle');
-    } else if (currentStatus === 'processing') {
+    } else if (currentAppStatus === 'processing') {
         logger.info('🟡 Cancelling ongoing processing via Escape key.');
         _notifyProcessingCancelledByEscape();
         resetShortcutState();
-        _sendRecordingStatus('idle');
     } else if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
          logger.info('🟡 Cancelling wait for double-click via Escape key.');
          resetShortcutState();
-         _sendRecordingStatus('idle');
     } else {
         logger.debug('Escape pressed, but not in a cancellable state.');
     }
@@ -257,9 +254,4 @@ export function stopKeyMonitor(): void {
         resetShortcutState();
         logger.info('Key monitor stopped.');
     }
-}
-
-let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
-export function updateMainProcessStatus(status: typeof mainProcessRecordingStatus): void {
-    mainProcessRecordingStatus = status;
 }
