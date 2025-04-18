@@ -1,4 +1,4 @@
-# vox-test
+# Vox
 
 An Electron application with Svelte and TypeScript
 

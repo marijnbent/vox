@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: vox-test
+appId: nl.marijnbent.vox
+productName: Vox
 directories:
   buildResources: build
 files:
@@ -9,11 +9,10 @@ files:
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  - resources/**/*
 asarUnpack:
   - resources/**
 win:
-  executableName: vox-test
+  executableName: vox
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -23,10 +22,8 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSMicrophoneUsageDescription: This app requires microphone access to capture audio for transcription.
-    - NSScreenCaptureUsageDescription: This app requires screen capture access for potential future contextual transcription features. # For Screen Recording
-    - NSAccessibilityUsageDescription: This app requires Accessibility access to enable global keyboard shortcuts. # For Accessibility
-    # - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder. # Keep if needed
-    # - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder. # Keep if needed
+    - NSScreenCaptureUsageDescription: This app requires screen capture access for potential future contextual transcription features.
+    - NSAccessibilityUsageDescription: This app requires Accessibility access to enable global keyboard shortcuts.
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}
@@ -35,7 +32,7 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
+  maintainer: marijnbent.nl
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}

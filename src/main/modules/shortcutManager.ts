@@ -183,7 +183,7 @@ export function startKeyMonitor(keysToWatch: string[]): void {
     }
 
     const basePath = app.isPackaged
-        ? path.join(process.resourcesPath, 'resources')
+        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources')
         : path.join(app.getAppPath(), 'resources');
     const executablePath = path.join(basePath, 'key-monitor');
 
