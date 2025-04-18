@@ -60,9 +60,14 @@ function resetShortcutState(): void {
 
 function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
     const now = Date.now();
-    logger.debug(`Key Event: ${keyName}_${type} | Current State: ${ShortcutState[currentState]}`);
+    logger.debug(`Key Event: ${keyName}_${type} | Current State: ${ShortcutState[currentState]} | Main Status: ${mainProcessRecordingStatus}`);
 
     if (type === 'DOWN') {
+        if (mainProcessRecordingStatus !== 'idle') {
+            logger.debug(`Ignoring Key Down ${keyName} because main status is 'processing'.`);
+            return;
+        }
+
         if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
             if (doubleClickTimeoutId) clearTimeout(doubleClickTimeoutId);
             doubleClickTimeoutId = null;
