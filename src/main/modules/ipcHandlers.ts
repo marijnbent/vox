@@ -1,5 +1,5 @@
 import Mustache from 'mustache';
-import { ipcMain, systemPreferences, shell, clipboard } from 'electron';
+import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron';
 import { exec } from 'child_process';
 import store from '../store';
 import { logger } from '../logger';
@@ -11,34 +11,28 @@ import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 import { LocalWhisperService, AVAILABLE_LOCAL_MODELS } from '../transcription/LocalWhisperService';
-import { statusEmitter } from '../index'; // Import the emitter
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
-let currentAppStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle'; // Local status variable
 
 export function initializeIpcHandlers(dependencies: {
     transcriptionManager: TranscriptionManager;
     enhancementManager: EnhancementManager;
     getProcessingCancelledFlag: () => boolean;
     setProcessingCancelledFlag: (value: boolean) => void;
+    sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void;
 }): void {
     transcriptionManager = dependencies.transcriptionManager;
     enhancementManager = dependencies.enhancementManager;
     _getProcessingCancelledFlag = dependencies.getProcessingCancelledFlag;
     _setProcessingCancelledFlag = dependencies.setProcessingCancelledFlag;
-
-    // Subscribe to status updates
-    statusEmitter.on('status-update', (status: typeof currentAppStatus) => {
-        logger.debug(`IpcHandlers received status update via emitter: ${status}`);
-        currentAppStatus = status;
-    });
-
-    logger.info('IPC Handlers initialized and subscribed to status updates.');
+    _sendRecordingStatus = dependencies.sendRecordingStatus;
+    logger.info('IPC Handlers initialized with dependencies.');
 }
 
 let _getProcessingCancelledFlag: () => boolean = () => false;
 let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
+let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 
 export function setupIpcHandlers(): void {
     logger.info('Setting up IPC Handlers...');
@@ -141,14 +135,17 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
 
     if (!transcriptionManager) {
         logger.error('IPC: Cannot transcribe audio, TranscriptionManager not initialized.');
+        _sendRecordingStatus('error');
         throw new Error('TranscriptionManager not initialized.');
     }
     if (!mainWindow) {
         logger.error('IPC: Cannot transcribe audio, mainWindow is not available.');
+        _sendRecordingStatus('error');
         throw new Error('Main window not available.');
     }
 
     logger.info(`IPC: Received audio data (${audio.audioData.byteLength} bytes, type: ${audio.mimeType}) for transcription.`);
+    _sendRecordingStatus('processing');
 
     let originalTranscriptionText = '';
     let finalText = '';
@@ -252,6 +249,7 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
         }
 
         sendToMain('transcription-result', finalText);
+        _sendRecordingStatus('idle');
 
         if (store.get('settings.autoPaste', true) && !_getProcessingCancelledFlag()) {
            logger.info('Auto-paste enabled, writing to clipboard and simulating paste...');
@@ -283,11 +281,15 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
     } catch (error: unknown) {
         if (_getProcessingCancelledFlag()) {
             logger.info('Processing cancelled by Escape during error handling.');
+            if (mainProcessRecordingStatus !== 'idle') {
+                _sendRecordingStatus('idle');
+            }
             return;
         }
         const message = error instanceof Error ? error.message : String(error);
         logger.error('IPC: Transcription failed:', message);
         sendToMain('transcription-error', message);
+        _sendRecordingStatus('error');
         throw error;
     }
 }
@@ -349,4 +351,10 @@ function handleOpenSettingsURL(_, url: string) {
 
 function handleProcessingCancelledSilence() {
     logger.info('IPC: Received notification that processing was cancelled due to silence.');
+    _sendRecordingStatus('idle');
+}
+
+let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
+export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
+    mainProcessRecordingStatus = status;
 }
