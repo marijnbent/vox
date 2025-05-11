@@ -143,14 +143,19 @@
                  {getStatusText(accessibilityStatus)}
               </span>
             </div>
-             {#if accessibilityStatus === 'not-granted'}
+             {#if ['not-granted', 'not-determined', 'denied', 'restricted'].includes(accessibilityStatus)}
                 <div class="mt-2">
+                    {#if (accessibilityStatus === 'denied' || accessibilityStatus === 'restricted') && !showManualInstructions}
+                        <p class="text-xs opacity-80 mb-2">
+                            Accessibility access was previously {getStatusText(accessibilityStatus).toLowerCase()}. Clicking below will attempt to re-prompt and then show guidance for System Settings.
+                        </p>
+                    {/if}
                     <button class="btn btn-primary btn-sm" on:click={requestAccessibility}>
                       Request Access
                     </button>
                     {#if showManualInstructions}
                         <p class="text-xs text-warning mt-2">
-                            System Settings should open. Please find 'Vox Transcriber' (or 'key-monitor') in the Accessibility list, click '+', add it if missing, and ensure the toggle is ON. You may need to restart the app.
+                            The system prompt for Accessibility access may have appeared. If not, or if access is still not granted, please go to System Settings > Privacy & Security > Accessibility. Find 'Vox Transcriber' (or 'key-monitor') in the list, add it if missing, and ensure its toggle is ON. You might need to restart the app after changing this setting.
                         </p>
                     {/if}
                 </div>
