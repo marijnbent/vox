@@ -10,9 +10,9 @@ import type { EnhancementSettings, EnhancementPrompt } from '../store';
 export function getDefaultPromptTemplate(): string {
   try {
     const basePath = app.isPackaged
-        ? process.resourcesPath
-        : app.getAppPath();
-    const filePath = path.join(basePath, 'resources', 'default-prompt.txt');
+        ? path.join(process.resourcesPath)
+        : path.join(app.getAppPath(), 'resources');
+    const filePath = path.join(basePath, 'default-prompt.txt');
 
     if (fs.existsSync(filePath)) {
       logger.debug(`Loading default prompt from: ${filePath}`);

@@ -20,8 +20,6 @@ Cleaned: "The project will take about three weeks to complete."
 Original: "We're going to discuss the new, uh, the upcoming changes to the policy."
 Cleaned: "We're going to discuss the upcoming changes to the policy."
 
-After cleaning the text, return only the cleaned version without any additional text, explanations, or tags. The output should be ready for direct use without further editing.
-
 Here is the transcribed text:
 {{transcription}}
 
@@ -41,3 +39,5 @@ Words that the user added to its dictionary. Replace if you think the word was t
 {{#context_screen}}
 {{context_screen}}
 {{/context_screen}}
+
+Return only the cleaned version without any additional text, explanations, or tags. The output should be ready for direct use without further editing.

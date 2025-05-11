@@ -16,11 +16,13 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!.git/**'
   - '!*.log'
-asarUnpack:
-  - resources/**
 extraResources:
   - from: resources/icon-tray.png
     to: icon-tray.png
+  - from: resources/default-prompt.txt
+    to: default-prompt.txt
+  - from: resources/key-monitor
+    to: key-monitor
 win:
   executableName: vox
 nsis:

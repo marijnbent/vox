@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import log from 'electron-log';
 
 log.transports.file.level = 'info';
+log.transports.file.sync = false;
 log.transports.console.level = 'debug';
 log.initialize();
 
