@@ -44,6 +44,7 @@ declare global {
       clearAllHistory: () => Promise<boolean>,
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
+      getFocusedInputFieldText: () => Promise<string | null>;
       getDefaultPromptContent: () => Promise<string>;
       getLogFilePath: () => Promise<string>;
       getLogLines: (lineCount?: number) => Promise<string[]>;

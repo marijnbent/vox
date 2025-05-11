@@ -333,7 +333,7 @@
 
           <div class="divider py-4">Context Variables</div>
           <p class="text-sm opacity-70 -mt-4 mb-4">
-            Enable context sources to include them in your prompts using placeholders like <code class="kbd kbd-xs">{'{{context_screen}}'}</code>. (Note: Context capture is not yet implemented).
+            Enable context sources to include them in your prompts using placeholders like <code class="kbd kbd-xs">{'{{context_screen}}'}</code> or <code class="kbd kbd-xs">{'{{context_input_field}}'}</code>. (Note: Screen context capture is not yet fully implemented).
           </p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
               <div class="form-control">

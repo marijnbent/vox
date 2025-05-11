@@ -20,24 +20,27 @@ Cleaned: "The project will take about three weeks to complete."
 Original: "We're going to discuss the new, uh, the upcoming changes to the policy."
 Cleaned: "We're going to discuss the upcoming changes to the policy."
 
-Here is the transcribed text:
-{{transcription}}
-
 {{#dictionary_words}}
-Words that the user added to its dictionary. Replace if you think the word was transcribed differently.
-{{dictionary_words}}
+The following words are in the dictionary that the user added. Replace if you think the word was transcribed incorrectly.
+"""{{dictionary_words}}"""
 {{/dictionary_words}}
 
 {{#context_input_field}}
-{{context_input_field}}
+The following text is from the input field that is in focus. The enhanced text goes at the end. Make sure the capitalisation is correct.
+"""{{context_input_field}}"""
 {{/context_input_field}}
 
 {{#context_clipboard}}
-{{context_clipboard}}
+The following text is in the clipboard:
+"""{{context_clipboard}}"""
 {{/context_clipboard}}
 
 {{#context_screen}}
-{{context_screen}}
+The following in the screen context:
+"""{{context_screen}}"""
 {{/context_screen}}
+
+Here is the transcribed text:
+"""{{transcription}}"""
 
 Return only the cleaned version without any additional text, explanations, or tags. The output should be ready for direct use without further editing.

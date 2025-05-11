@@ -79,6 +79,7 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('getMediaPermissionStatus', handleGetMediaPermissionStatus);
     ipcMain.handle('requestMediaPermission', handleRequestMediaPermission);
     ipcMain.handle('openSettingsURL', handleOpenSettingsURL);
+    ipcMain.handle('getFocusedInputFieldText', handleGetFocusedInputFieldText);
 
     ipcMain.handle('getHistory', (_, page?: number, pageSize?: number) => {
         logger.info(`IPC: Received request for history page ${page || 1}`);
@@ -196,7 +197,20 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
                    contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
                  }
                  if (enhancementSettings.useContextInputField) {
-                   contextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
+                  logger.info('IPC: useContextInputField is true, attempting to get focused input field text...');
+                  try {
+                      const focusedText = await handleGetFocusedInputFieldText();
+                      if (focusedText) {
+                          contextData.context_input_field = focusedText;
+                          logger.info('IPC: Successfully added focused input field text to context.');
+                      } else {
+                          contextData.context_input_field = ""; // Set to empty string if null or not found
+                          logger.info('IPC: No focused input field text found or feature unavailable, context_input_field set to empty.');
+                      }
+                  } catch (inputError) {
+                      logger.error('IPC: Error getting focused input field text:', inputError);
+                      contextData.context_input_field = ""; // Set to empty string on error
+                  }
                  }
                  if (enhancementSettings.useContextClipboard) {
                    contextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
@@ -369,5 +383,62 @@ function handleProcessingCancelledSilence() {
 let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
 export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
     mainProcessRecordingStatus = status;
+}
+
+async function handleGetFocusedInputFieldText(): Promise<string | null> {
+    if (process.platform !== 'darwin') {
+        logger.warn('IPC: getFocusedInputFieldText is only available on macOS.');
+        return null;
+    }
+    // First, check accessibility status.
+    const hasAccessibility = systemPreferences.isTrustedAccessibilityClient(false);
+    if (!hasAccessibility) {
+        logger.warn('IPC: Cannot get focused input field text, Accessibility permission not granted.');
+        // Optionally, notify the user through the renderer process if this happens frequently
+        // sendToMain('accessibility-required-for-input-context');
+        return null;
+    }
+
+    const appleScript = `
+tell application "System Events"
+    try
+        set focusedApp to name of first application process whose frontmost is true
+        tell process focusedApp
+            set focusedElement to value of attribute "AXFocusedUIElement"
+            if (role of focusedElement is "AXTextField" or role of focusedElement is "AXTextArea" or role of focusedElement is "AXComboBox" or role of focusedElement is "AXSearchField") then
+                return value of focusedElement
+            else if (role of focusedElement is "AXWebArea" or role of focusedElement is "AXGroup") then
+                -- Attempt to find a focused text element within a web area or group
+                try
+                    set webFocusedElement to value of attribute "AXFocusedUIElement" of focusedElement
+                     if (role of webFocusedElement is "AXTextField" or role of webFocusedElement is "AXTextArea") then
+                        return value of webFocusedElement
+                    end if
+                end try
+            end if
+        end tell
+    end try
+    return null
+end tell
+    `;
+
+    return new Promise((resolve) => {
+        exec(`osascript -e '${appleScript}'`, (error, stdout, stderr) => {
+            if (error) {
+                logger.error('IPC: Error executing AppleScript for focused input field:', error.message);
+                logger.error('IPC: AppleScript stderr:', stderr);
+                resolve(null);
+                return;
+            }
+            const result = stdout.trim();
+            if (result && result !== "null") {
+                logger.info(`IPC: Focused input field text retrieved: "${result.substring(0, 50)}..."`);
+                resolve(result);
+            } else {
+                logger.info('IPC: No focused input field text found or element not a text field.');
+                resolve(null);
+            }
+        });
+    });
 }
 
