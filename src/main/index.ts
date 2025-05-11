@@ -108,7 +108,7 @@ app.whenReady().then(async () => {
 
     try {
         const iconPath = app.isPackaged
-            ? path.join(process.resourcesPath, 'resources/icon-tray.png')
+            ? path.join(process.resourcesPath, 'icon-tray.png')
             : path.join(app.getAppPath(), 'resources/icon-tray.png');
 
         if (!fs.existsSync(iconPath)) {
@@ -116,12 +116,25 @@ app.whenReady().then(async () => {
         } else {
             logger.info(`Loading tray icon from: ${iconPath}`);
             const icon = nativeImage.createFromPath(iconPath);
+            if (icon.isEmpty()) {
+                logger.error('Created nativeImage is empty.');
+            } else {
+                logger.info('nativeImage created successfully.');
+            }
             if (process.platform === 'darwin') {
+                logger.info('Setting template image for macOS.');
                 icon.setTemplateImage(true);
             }
 
+            logger.info('Attempting to create Tray object...');
             tray = new Tray(icon);
+            if (tray) {
+                logger.info('Tray object created successfully.');
+            } else {
+                logger.error('Failed to create Tray object.');
+            }
 
+            logger.info('Building context menu...');
             const contextMenu = Menu.buildFromTemplate([
                 {
                     label: 'Show Settings',
@@ -147,12 +160,20 @@ app.whenReady().then(async () => {
                     }
                 }
             ]);
+            logger.info('Context menu built.');
 
+            logger.info('Setting tooltip...');
             tray.setToolTip('Vox Transcriber');
+            logger.info('Tooltip set.');
+
+            logger.info('Setting context menu...');
             tray.setContextMenu(contextMenu);
+            logger.info('Context menu set.');
 
             if (process.platform === 'darwin') {
+                logger.info('Setting up tray click listener for macOS...');
                 tray.on('click', () => {
+                    logger.info('Tray clicked on macOS.');
                     const win = WindowManager.getMainWindow();
                     if (win && !win.isDestroyed()) {
                         if (win.isVisible() && win.isFocused()) {
