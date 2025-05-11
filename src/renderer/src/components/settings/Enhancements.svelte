@@ -222,10 +222,11 @@
     <div class="bg-base-100 max-w-2xl space-y-6">
 
         <div class="form-control">
-          <label class="label cursor-pointer">
+          <label class="label cursor-pointer" for="enable-enhancements-toggle">
             <span class="label-text font-semibold">Enable Enhancements</span>
             <input
               type="checkbox"
+              id="enable-enhancements-toggle"
               class="toggle toggle-primary"
               bind:checked={$settings.enabled}
             />
@@ -233,8 +234,8 @@
           <p class="text-sm opacity-70 ml-1">
             When enabled, transcriptions can be processed by an LLM to improve formatting, fix grammar, etc.
           </p>
-            <label class="label"><span class="label-text-alt">Must be OpenAI API compatible.</span></label>
-          </div>
+          <label class="label" for="enable-enhancements-toggle"><span class="label-text-alt">Must be OpenAI API compatible.</span></label>
+        </div>
 
         {#if $settings.enabled}
           <div class="divider pt-4">Enhancement Provider</div>
@@ -309,7 +310,7 @@
                     <span class="label-text">Base URL</span>
                   </label>
                   <input id="custom-base-url" type="text" placeholder="eg. https://api.mistral.ai/v1/" class="input input-bordered input-sm w-full" bind:value={$settings.customBaseUrl} />
-                   <label class="label"><span class="label-text-alt text-xs">Must be OpenAI API compatible.</span></label>
+                  <label class="label" for="custom-base-url"><span class="label-text-alt text-xs">Must be OpenAI API compatible.</span></label>
                 </div>
 
                 <div class="form-control">
@@ -374,6 +375,7 @@
                    <button
                      class="btn btn-xs btn-ghost opacity-0 group-hover:opacity-100 transition-opacity"
                      title="View Default Prompt"
+                     aria-label="View Default Prompt"
                      on:click|stopPropagation|preventDefault={() => viewPrompt('default')}
                    >
                      <i class="ri-eye-line"></i>
@@ -388,6 +390,7 @@
                     <button
                       class="btn btn-xs btn-ghost opacity-0 group-hover:opacity-100 transition-opacity mr-1"
                       title="Edit Prompt"
+                      aria-label="Edit Prompt"
                       on:click|stopPropagation|preventDefault={() => editPrompt(prompt)}
                     >
                        <i class="ri-pencil-line"></i>
@@ -396,6 +399,7 @@
                     <button
                       class="btn btn-xs btn-ghost text-error opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Delete Prompt"
+                      aria-label="Delete Prompt"
                       on:click|stopPropagation|preventDefault={() => deletePrompt(prompt.id)}
                     >
                       <i class="ri-delete-bin-line"></i>
@@ -450,11 +454,11 @@
     {#if modalMode === 'view'}
       <div class="space-y-4">
         <div>
-          <label class="label"><span class="label-text font-semibold">Name:</span></label>
+          <div class="label"><span class="label-text font-semibold">Name:</span></div>
           <p class="p-2 bg-base-200 rounded">{currentPrompt.name}</p>
         </div>
         <div>
-          <label class="label"><span class="label-text font-semibold">Template:</span></label>
+          <div class="label"><span class="label-text font-semibold">Template:</span></div>
           <pre class="p-2 bg-base-200 rounded text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">{currentPrompt.template}</pre>
         </div>
       </div>

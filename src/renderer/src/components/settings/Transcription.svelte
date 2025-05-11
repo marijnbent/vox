@@ -115,7 +115,7 @@
             class="input input-bordered w-full"
             bind:value={$openaiApiKey}
           />
-          <label class="label">
+          <label class="label" for="openai-api-key">
             <span class="label-text-alt"
               >Required for OpenAI transcription. Get key from <a
                 href="https://platform.openai.com/api-keys"
@@ -140,7 +140,7 @@
             >
             <option value="gpt-4o-transcribe">GPT-4o Transcribe</option>
           </select>
-          <label class="label">
+          <label class="label" for="openai-model-select">
             <span class="label-text-alt">Select the Whisper model to use.</span>
           </label>
         </div>
@@ -158,7 +158,7 @@
             class="input input-bordered w-full"
             bind:value={$deepgramApiKey}
           />
-          <label class="label">
+          <label class="label" for="deepgram-api-key">
             <span class="label-text-alt"
               >Required for Deepgram transcription. Get key from <a
                 href="https://console.deepgram.com/signup"
@@ -182,7 +182,7 @@
             <option value="enhanced">Enhanced</option>
             <option value="whisper-large">Whisper Large</option>
           </select>
-          <label class="label">
+          <label class="label" for="deepgram-model-select">
             <span class="label-text-alt">Select the Deepgram model to use.</span
             >
           </label>
