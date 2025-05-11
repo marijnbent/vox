@@ -45,37 +45,2461 @@ Additional Info:
 ================================================================
 Directory Structure
 ================================================================
-assets/
-  main.css
-  widget.css
-components/
-  layout/
-    AppLayout.svelte
-    StatusIndicator.svelte
-  settings/
-    Dashboard.svelte
-    Dictionary.svelte
-    Enhancements.svelte
-    History.svelte
-    Logs.svelte
-    Permissions.svelte
-    Shortcuts.svelte
-    Transcription.svelte
-  WaterWaveAnimation.svelte
-lib/
-  audioRecorder.ts
-App.svelte
-env.d.ts
-main.ts
-widget.ts
-WidgetApp.svelte
+.roo/
+  mcp.json
+resources/
+  default-prompt.txt
+  key-monitor.swift
+  README.md
+src/
+  main/
+    enhancement/
+      EnhancementManager.ts
+      EnhancementService.ts
+      OpenaiEnhancementService.ts
+    modules/
+      ipcHandlers.ts
+      shortcutManager.ts
+      windowManager.ts
+    transcription/
+      DeepgramService.ts
+      OpenaiWhisperService.ts
+      TranscriptionManager.ts
+      TranscriptionService.ts
+    historyService.ts
+    index.ts
+    logger.ts
+    store.ts
+  preload/
+    index.d.ts
+    index.ts
+    widget.d.ts
+    widget.ts
+  renderer/
+    src/
+      assets/
+        main.css
+        widget.css
+      components/
+        layout/
+          AppLayout.svelte
+          StatusIndicator.svelte
+        settings/
+          Dashboard.svelte
+          Dictionary.svelte
+          Enhancements.svelte
+          History.svelte
+          Logs.svelte
+          Permissions.svelte
+          Shortcuts.svelte
+          Transcription.svelte
+        WaterWaveAnimation.svelte
+      lib/
+        audioRecorder.ts
+      App.svelte
+      env.d.ts
+      main.ts
+      widget.ts
+      WidgetApp.svelte
+    index.html
+    widget.html
+.editorconfig
+.gitignore
+.prettierignore
+.prettierrc.yaml
+dev-app-update.yml
+electron-builder.yml
+electron.vite.config.ts
+eslint.config.mjs
+package.json
+README.md
+svelte.config.mjs
+tsconfig.json
+tsconfig.node.json
+tsconfig.web.json
 
 ================================================================
 Files
 ================================================================
 
 ================
-File: assets/main.css
+File: .roo/mcp.json
+================
+{
+  "mcpServers": {
+    "deepgram-js-sdk Docs": {
+      "url": "https://gitmcp.io/deepgram/deepgram-js-sdk",
+      "disabled": false,
+      "autoApprove": []
+    },
+    "electron Docs": {
+      "url": "https://gitmcp.io/electron/electron",
+      "disabled": false,
+      "autoApprove": []
+    },
+    "svelte Docs": {
+      "disabled": false,
+      "autoApprove": [],
+      "url": "https://gitmcp.io/sveltejs/svelte"
+    },
+    "daisyui Docs": {
+      "disabled": false,
+      "autoApprove": [],
+      "url": "https://gitmcp.io/saadeghi/daisyui"
+    }
+  }
+}
+
+================
+File: resources/default-prompt.txt
+================
+You are tasked with cleaning up text that has been transcribed from voice. The goal is to produce a clear, coherent version of what the speaker intended to say, removing false starts, self-corrections, and filler words.
+
+Follow these steps to clean up the text:
+
+1. Remove filler words and phrases such as "um", "uh", "like", "you know", "I mean", etc.
+2. Identify and remove false starts. These are instances where the speaker begins a sentence or phrase but then restarts or changes direction.
+3. When the speaker corrects themselves, keep only the corrected version. For example, if the text says "The user need to, I mean, the user can do", retain only "The user can do".
+4. Maintain the original meaning and intent of the speaker. Do not add new information or change the substance of what was said.
+5. Ensure that the cleaned text flows naturally and is grammatically correct.
+6. Preserve any important pauses or breaks in thought by using appropriate punctuation.
+7. For very short texts (e.g., single words or brief phrases), remove the ending period if present and do not capitalize the first word.
+
+Here are some examples to illustrate the process:
+Original: "So, um, the thing is, you know, we need to, uh, I mean, we should probably look into this further."
+Cleaned: "We should probably look into this further."
+
+Original: "The project will take about two weeks, no, sorry, three weeks to complete."
+Cleaned: "The project will take about three weeks to complete."
+
+Original: "We're going to discuss the new, uh, the upcoming changes to the policy."
+Cleaned: "We're going to discuss the upcoming changes to the policy."
+
+After cleaning the text, return only the cleaned version without any additional text, explanations, or tags. The output should be ready for direct use without further editing.
+
+Here is the transcribed text:
+{{transcription}}
+
+{{#dictionary_words}}
+Words that the user added to its dictionary. Replace if you think the word was transcribed differently.
+{{dictionary_words}}
+{{/dictionary_words}}
+
+{{#context_input_field}}
+{{context_input_field}}
+{{/context_input_field}}
+
+{{#context_clipboard}}
+{{context_clipboard}}
+{{/context_clipboard}}
+
+{{#context_screen}}
+{{context_screen}}
+{{/context_screen}}
+
+================
+File: resources/key-monitor.swift
+================
+import Foundation
+import CoreGraphics
+import AppKit // For NSEvent.ModifierFlags constants
+
+// --- Key Definitions ---
+struct MonitoredKey {
+    let name: String
+    let keyCode: CGKeyCode      // Specific key code (e.g., 55 for Left Command)
+    let flag: CGEventFlags?     // Corresponding flag mask (e.g., .maskCommand)
+    var isDown: Bool = false
+}
+
+// Global mutable state
+var keysToMonitor: [MonitoredKey] = []
+var eventTap: CFMachPort?
+var runLoopSource: CFRunLoopSource?
+
+// --- Argument Parsing ---
+let arguments = CommandLine.arguments
+if arguments.count < 2 {
+    FileHandle.standardError.write("Usage: \(arguments[0]) KEY1 KEY2 ... (e.g., COMMAND OPTION SHIFT)\n".data(using: .utf8)!)
+    exit(1)
+}
+let requestedKeys = Set(arguments.dropFirst().map { $0.uppercased() })
+
+// Map names to key codes AND flags
+// 55: Left Command, 54: Right Command -> .maskCommand
+// 58: Left Option, 61: Right Option -> .maskAlternate
+// 56: Left Shift, 60: Right Shift -> .maskShift
+// 59: Left Control, 62: Right Control -> .maskControl
+// 63: Fn key -> .maskSecondaryFn
+if requestedKeys.contains("COMMAND") {
+    // keysToMonitor.append(MonitoredKey(name: "COMMAND", keyCode: 55, flag: .maskCommand)) // Left
+    keysToMonitor.append(MonitoredKey(name: "COMMAND", keyCode: 54, flag: .maskCommand)) // Right
+}
+
+if requestedKeys.contains("OPTION") {
+    // keysToMonitor.append(MonitoredKey(name: "OPTION", keyCode: 58, flag: .maskAlternate)) // Left
+    keysToMonitor.append(MonitoredKey(name: "OPTION", keyCode: 61, flag: .maskAlternate)) // Right
+}
+
+if requestedKeys.contains("CONTROL") {
+    // keysToMonitor.append(MonitoredKey(name: "CONTROL", keyCode: 59, flag: .maskControl)) // Left
+    keysToMonitor.append(MonitoredKey(name: "CONTROL", keyCode: 62, flag: .maskControl)) // Right
+}
+
+if requestedKeys.contains("FN") {
+    keysToMonitor.append(MonitoredKey(name: "FN", keyCode: 63, flag: .maskSecondaryFn))
+}
+
+// Add Escape key monitoring (keyCode 53)
+keysToMonitor.append(MonitoredKey(name: "ESCAPE", keyCode: 53, flag: nil))
+
+if keysToMonitor.isEmpty {
+    FileHandle.standardError.write("No valid keys specified to monitor.\n".data(using: .utf8)!)
+    exit(1)
+}
+
+// --- CGEventTap Callback ---
+let eventCallback: CGEventTapCallBack = { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+
+    // Handle Escape key separately on keyDown
+    if type == .keyDown {
+        let escapeKeyCode = CGKeyCode(53)
+        let currentKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        if currentKeyCode == escapeKeyCode {
+            FileHandle.standardOutput.write("ESCAPE_DOWN\n".data(using: .utf8)!)
+            fflush(stdout)
+        }
+    }
+
+    // Process modifier keys (Command, Option, etc.) for keyDown, keyUp, flagsChanged
+    guard type == .keyDown || type == .keyUp || type == .flagsChanged else {
+        return Unmanaged.passRetained(event) // Should not be reached if Escape was handled above, but keep for safety
+    }
+
+    var keyCode: CGKeyCode? = nil
+    if type == .keyDown || type == .keyUp {
+        keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+    }
+    let currentFlags = event.flags
+
+    // Iterate through the *modifier* keys we are specifically monitoring (excluding Escape)
+    for i in 0..<keysToMonitor.count {
+        // Skip processing Escape key here as it's handled above
+        if keysToMonitor[i].name == "ESCAPE" {
+            continue
+        }
+
+        var key = keysToMonitor[i] // Mutable copy
+        var stateChanged = false
+        var isKeyDownNow: Bool? = nil // Use optional to see if state was determined
+
+        // Method 1: Direct KeyCode match (priority for modifiers)
+        if let code = keyCode, key.keyCode == code {
+             isKeyDownNow = (type == .keyDown)
+        }
+        // Method 2: FlagsChanged event - check corresponding flag (fallback for modifiers)
+        else if type == .flagsChanged, let flag = key.flag {
+             isKeyDownNow = currentFlags.contains(flag)
+        }
+
+        // If we determined a state for this modifier key in this event
+        if let determinedState = isKeyDownNow {
+            // Check if it's different from the last known state
+            if key.isDown != determinedState {
+                stateChanged = true
+                key.isDown = determinedState // Update state
+                keysToMonitor[i] = key      // Write back to global array
+            }
+        }
+
+        // If the state for this specific modifier key actually changed
+        if stateChanged {
+            let stateString = key.isDown ? "DOWN" : "UP"
+            FileHandle.standardOutput.write("\(key.name)_\(stateString)\n".data(using: .utf8)!)
+            fflush(stdout)
+        }
+    }
+
+    // Re-enable tap if it gets disabled
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+         if let tap = eventTap {
+             CGEvent.tapEnable(tap: tap, enable: true)
+         }
+    }
+
+    return Unmanaged.passRetained(event)
+}
+
+// --- Setup CGEventTap ---
+// (Setup logic remains the same as the previous working version)
+func setupEventTap() -> Bool {
+    let eventMask = (1 << CGEventType.keyDown.rawValue) |
+                    (1 << CGEventType.keyUp.rawValue) |
+                    (1 << CGEventType.flagsChanged.rawValue)
+
+    eventTap = CGEvent.tapCreate(tap: .cgSessionEventTap,
+                                 place: .headInsertEventTap,
+                                 options: .defaultTap,
+                                 eventsOfInterest: CGEventMask(eventMask),
+                                 callback: eventCallback,
+                                 userInfo: nil)
+
+    guard let eventTap = eventTap else {
+        FileHandle.standardError.write("Failed to create event tap. Ensure Accessibility permissions are granted.\n".data(using: .utf8)!)
+        fflush(stderr)
+        return false
+    }
+
+    runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+    guard let runLoopSource = runLoopSource else {
+        FileHandle.standardError.write("Failed to create run loop source.\n".data(using: .utf8)!)
+        fflush(stderr)
+        return false
+    }
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+
+    CGEvent.tapEnable(tap: eventTap, enable: true)
+    FileHandle.standardOutput.write("Event tap created successfully (Listening to KeyDown/Up/FlagsChanged).\n".data(using: .utf8)!)
+    fflush(stdout)
+    return true
+}
+
+// --- Main Execution ---
+if !setupEventTap() {
+    exit(1)
+}
+
+let monitoredNames = Set(keysToMonitor.map { $0.name }).joined(separator: ", ")
+FileHandle.standardOutput.write("Monitoring keys: \(monitoredNames)...\n".data(using: .utf8)!)
+fflush(stdout)
+
+CFRunLoopRun()
+
+// Cleanup
+FileHandle.standardOutput.write("Exiting...\n".data(using: .utf8)!)
+fflush(stdout)
+if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
+
+exit(0)
+
+================
+File: resources/README.md
+================
+# Key Monitor
+
+To compile:
+
+```bash
+swiftc key-monitor.swift -o key-monitor -framework CoreGraphics -framework AppKit
+```
+
+================
+File: src/main/enhancement/EnhancementManager.ts
+================
+import fs from 'fs';
+import path from 'path';
+import { app } from 'electron';
+import { EnhancementService } from './EnhancementService';
+import { OpenaiEnhancementService } from './OpenaiEnhancementService';
+import store from '../store';
+import { logger } from '../logger';
+import type { EnhancementSettings, EnhancementPrompt } from '../store';
+
+export function getDefaultPromptTemplate(): string {
+  try {
+    const basePath = app.isPackaged
+        ? process.resourcesPath
+        : app.getAppPath();
+    const filePath = path.join(basePath, 'resources', 'default-prompt.txt');
+
+    if (fs.existsSync(filePath)) {
+      logger.debug(`Loading default prompt from: ${filePath}`);
+      return fs.readFileSync(filePath, 'utf-8');
+    } else {
+      logger.error(`Default prompt file not found at: ${filePath}. Using fallback.`);
+      return `Please enhance the following transcription for clarity, grammar, and formatting. Keep the original meaning intact:\n\n{{transcription}}`;
+    }
+  } catch (error) {
+    logger.error('Error reading default prompt file:', error);
+    return `Please enhance the following transcription for clarity, grammar, and formatting. Keep the original meaning intact:\n\n{{transcription}}`;
+  }
+}
+
+export class EnhancementManager {
+  private enhancementService: EnhancementService;
+
+  constructor() {
+    this.enhancementService = new OpenaiEnhancementService();
+    logger.info('Enhancement Manager initialized using OpenaiEnhancementService for all providers.');
+  }
+
+  private getActivePromptTemplate(settings: EnhancementSettings): string {
+    if (settings.activePromptId === 'default') {
+      return getDefaultPromptTemplate();
+    }
+    const customPrompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
+    const activePrompt = customPrompts.find(p => p.id === settings.activePromptId);
+    if (activePrompt) {
+      logger.info(`Using custom enhancement prompt: ${activePrompt.name}`);
+      return activePrompt.template;
+    } else {
+      logger.warn(`Active custom prompt ID "${settings.activePromptId}" not found. Falling back to default prompt.`);
+      return getDefaultPromptTemplate();
+    }
+  }
+
+  public async enhance(text: string): Promise<string> {
+    const settings = store.get('enhancements') as EnhancementSettings;
+
+    if (text === '') {
+      logger.warn('EnhancementManager: No text provided for enhancement. Skipping enhancement.');
+      return text;
+    }
+    
+    if (!settings.enabled) {
+      logger.info('Enhancement disabled. Skipping enhancement.');
+      return text;
+    }
+
+    const promptTemplate = this.getActivePromptTemplate(settings);
+    let apiKey = '';
+    let model = '';
+    let apiEndpoint: string | undefined = undefined;
+
+    switch (settings.provider) {
+      case 'openai':
+        apiKey = settings.openaiApiKey;
+        model = settings.openaiModel;
+        break;
+      case 'gemini':
+        apiKey = settings.geminiApiKey;
+        model = settings.geminiModel;
+        apiEndpoint = "https://generativelanguage.googleapis.com/v1beta/openai/";
+        break;
+      case 'custom':
+        apiKey = settings.customApiKey;
+        model = settings.customModelName;
+        apiEndpoint = settings.customBaseUrl || undefined;
+        break;
+      default:
+        logger.error(`EnhancementManager: Invalid provider "${settings.provider}" encountered.`);
+        return text; 
+    }
+
+    if (!apiKey) {
+        logger.warn(`EnhancementManager: API key for provider "${settings.provider}" is missing. Skipping enhancement.`);
+        return text;
+    }
+     if (!model) {
+        logger.warn(`EnhancementManager: Model for provider "${settings.provider}" is missing. Skipping enhancement.`);
+        return text;
+    }
+
+    logger.info(`EnhancementManager: Enhancing text via OpenAI-compatible service using provider "${settings.provider}" settings (Model: "${model}", Endpoint: ${apiEndpoint || 'Default'}).`);
+    try {
+      const enhancedText = await this.enhancementService.enhance(
+          text,
+          promptTemplate,
+          apiKey,
+          model,
+          apiEndpoint
+      );
+      logger.info('EnhancementManager: Enhancement successful.');
+      return enhancedText;
+    } catch (error) {
+      logger.error(`EnhancementManager: Error during enhancement using ${settings.provider} settings:`, error);
+      return text;
+    }
+  }
+}
+
+================
+File: src/main/enhancement/EnhancementService.ts
+================
+export interface EnhancementService {
+  /**
+   * Enhances the given text using a specific prompt template.
+   * @param text The original transcribed text.
+   * @param promptTemplate The prompt template (e.g., "Fix this text: {{transcription}}").
+   * @param apiKey The API key for the service.
+   * @param model The specific model to use.
+   * @param apiEndpoint Optional endpoint for custom providers.
+   * @returns The enhanced text.
+   */
+  enhance(
+    text: string,
+    promptTemplate: string,
+    apiKey: string,
+    model: string,
+    apiEndpoint?: string
+  ): Promise<string>;
+}
+
+================
+File: src/main/enhancement/OpenaiEnhancementService.ts
+================
+import OpenAI from 'openai';
+import Mustache from 'mustache';
+import { EnhancementService } from './EnhancementService';
+import { logger } from '../logger';
+import store from '../store';
+import type { EnhancementSettings } from '../store';
+
+export class OpenaiEnhancementService implements EnhancementService {
+  async enhance(
+    text: string,
+    promptTemplate: string,
+    apiKey: string,
+    model: string,
+    baseURL?: string
+  ): Promise<string> {
+
+    if (!apiKey) {
+      logger.error('OpenAI Enhancement: API key is missing.');
+      throw new Error('OpenAI API key for enhancement is required.');
+    }
+
+    const openai = new OpenAI({
+      apiKey: apiKey,
+      baseURL: baseURL || undefined
+    });
+
+    const contextData: { [key: string]: any } = {
+      transcription: text
+    };
+    const enhancementSettings = store.get('enhancements') as EnhancementSettings;
+
+    if (enhancementSettings.useContextScreen) {
+      contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
+    }
+    if (enhancementSettings.useContextInputField) {
+      contextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
+    }
+    if (enhancementSettings.useContextClipboard) {
+      contextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
+    }
+    if (enhancementSettings.useDictionaryWordList) {
+      const dictionaryWords = store.get('dictionary.words', []) as string[];
+      contextData.dictionary_word_list = dictionaryWords.join(', ');
+    }
+
+    logger.debug('Rendering prompt template with context:', contextData);
+    const finalPrompt = Mustache.render(promptTemplate, contextData);
+    logger.debug(`Final rendered prompt: ${finalPrompt.substring(0, 100)}...`);
+
+    logger.info(`Sending enhancement request to OpenAI model ${model}...`);
+
+    try {
+      const completion = await openai.chat.completions.create({
+        messages: [
+          { role: 'user', content: finalPrompt }
+        ],
+        model: model,
+        temperature: 0.5,
+        max_tokens: Math.max(100, text.length * 2),
+      });
+
+      const enhancedText = completion.choices[0]?.message?.content;
+
+      if (enhancedText) {
+        logger.info('OpenAI Enhancement successful.');
+        return enhancedText.trim();
+      } else {
+        logger.error('OpenAI Enhancement: Received empty response from API.');
+        throw new Error('OpenAI enhancement returned an empty response.');
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('OpenAI Enhancement failed:', error);
+      throw new Error(`OpenAI enhancement failed: ${message}`);
+    }
+  }
+}
+
+================
+File: src/main/modules/ipcHandlers.ts
+================
+import Mustache from 'mustache';
+import { ipcMain, systemPreferences, shell, clipboard } from 'electron';
+import { exec } from 'child_process';
+import fs from 'fs/promises';
+import log from 'electron-log';
+import store from '../store';
+import { logger } from '../logger';
+import { TranscriptionManager } from '../transcription/TranscriptionManager';
+import { EnhancementManager, getDefaultPromptTemplate } from '../enhancement/EnhancementManager';
+import * as historyService from '../historyService';
+import { startKeyMonitor } from './shortcutManager';
+import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
+import type { EnhancementPrompt, EnhancementSettings } from '../store';
+import type { HistoryRecord } from '../historyService';
+
+
+
+let transcriptionManager: TranscriptionManager;
+let enhancementManager: EnhancementManager;
+
+export function initializeIpcHandlers(dependencies: {
+    transcriptionManager: TranscriptionManager;
+    enhancementManager: EnhancementManager;
+    getProcessingCancelledFlag: () => boolean;
+    setProcessingCancelledFlag: (value: boolean) => void;
+    sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void;
+}): void {
+    transcriptionManager = dependencies.transcriptionManager;
+    enhancementManager = dependencies.enhancementManager;
+    _getProcessingCancelledFlag = dependencies.getProcessingCancelledFlag;
+    _setProcessingCancelledFlag = dependencies.setProcessingCancelledFlag;
+    _sendRecordingStatus = dependencies.sendRecordingStatus;
+    logger.info('IPC Handlers initialized with dependencies.');
+}
+
+let _getProcessingCancelledFlag: () => boolean = () => false;
+let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
+let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
+
+export function setupIpcHandlers(): void {
+    logger.info('Setting up IPC Handlers...');
+
+    ipcMain.handle('getStoreValue', (_, key: string) => {
+        logger.debug(`IPC: Handling getStoreValue for key: ${key}`);
+        try {
+            const value = store.get(key);
+            logger.debug(`IPC: Value for ${key}:`, value);
+            return value;
+        } catch (error) {
+            logger.error(`IPC: Error getting store value for key ${key}:`, error);
+            throw error;
+        }
+    });
+    ipcMain.handle('setStoreValue', (_, key: string, value: unknown) => {
+        logger.debug(`IPC: Handling setStoreValue for key: ${key} with value:`, value);
+        try {
+            store.set(key, value);
+            logger.debug(`IPC: Successfully set store value for key: ${key}`);
+        } catch (error) {
+            logger.error(`IPC: Error setting store value for key ${key}:`, error);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('updateMonitoredKeys', (_, keys: string[]) => {
+        logger.info('IPC: Received request to update monitored keys:', keys);
+        if (process.platform === 'darwin') {
+            const validKeys = keys.map(k => k.toUpperCase()).filter(k => ["COMMAND", "OPTION", "CONTROL", "SHIFT", "FN"].includes(k));
+            startKeyMonitor(validKeys);
+        } else {
+            logger.warn('IPC: Key monitoring only supported on macOS.');
+        }
+    });
+
+    ipcMain.handle('transcribe-audio', handleTranscribeAudio);
+
+    ipcMain.handle('getAccessibilityStatus', handleGetAccessibilityStatus);
+    ipcMain.handle('requestAccessibilityAccess', handleRequestAccessibilityAccess);
+    ipcMain.handle('getMediaPermissionStatus', handleGetMediaPermissionStatus);
+    ipcMain.handle('requestMediaPermission', handleRequestMediaPermission);
+    ipcMain.handle('openSettingsURL', handleOpenSettingsURL);
+
+    ipcMain.handle('getHistory', (_, page?: number, pageSize?: number) => {
+        logger.info(`IPC: Received request for history page ${page || 1}`);
+        return historyService.getHistoryEntries(page, pageSize);
+    });
+    ipcMain.handle('deleteHistoryEntry', (_, id: string) => {
+         logger.info(`IPC: Received request to delete history entry ${id}`);
+         return historyService.deleteHistoryEntry(id);
+    });
+    ipcMain.handle('clearAllHistory', () => {
+         logger.info(`IPC: Received request to clear all history`);
+         return historyService.clearAllHistory();
+    });
+
+    ipcMain.on('processing-cancelled-silence', handleProcessingCancelledSilence);
+
+    ipcMain.on('widget-stop-recording', () => {
+        logger.info('Received stop recording request from widget');
+        sendToMain('stop-recording');
+    });
+
+    ipcMain.on('recorder-actually-started', () => {
+        logger.debug('IPC: Received notification that recorder actually started.');
+        sendToWidget('widget-recorder-started');
+    });
+
+    ipcMain.handle('getDefaultPromptContent', () => {
+      return getDefaultPromptTemplate();
+    });
+
+    ipcMain.handle('getLogFilePath', () => {
+        try {
+            const logPath = log.transports.file.getFile().path;
+            logger.info(`IPC: Providing log file path: ${logPath}`);
+            return logPath;
+        } catch (error) {
+            logger.error('IPC: Error getting log file path:', error);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('getLogLines', async (_, lineCount: number = 500) => {
+        logger.info(`IPC: Received request for last ${lineCount} log lines.`);
+        try {
+            const logPath = log.transports.file.getFile().path;
+            const data = await fs.readFile(logPath, 'utf-8');
+            const lines = data.split('\n');
+            const lastLines = lines.slice(Math.max(lines.length - lineCount, 0));
+            logger.debug(`IPC: Returning ${lastLines.length} log lines.`);
+            return lastLines;
+        } catch (error) {
+            logger.error(`IPC: Error reading log file for getLogLines:`, error);
+            throw error;
+        }
+    });
+
+    logger.info('IPC Handlers setup complete.');
+}
+
+async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeType: string }): Promise<void> {
+    _setProcessingCancelledFlag(false);
+    const mainWindow = getMainWindow();
+
+    if (!transcriptionManager) {
+        logger.error('IPC: Cannot transcribe audio, TranscriptionManager not initialized.');
+        _sendRecordingStatus('error');
+        throw new Error('TranscriptionManager not initialized.');
+    }
+    if (!mainWindow) {
+        logger.error('IPC: Cannot transcribe audio, mainWindow is not available.');
+        _sendRecordingStatus('error');
+        throw new Error('Main window not available.');
+    }
+
+    logger.info(`IPC: Received audio data (${audio.audioData.byteLength} bytes, type: ${audio.mimeType}) for transcription.`);
+    _sendRecordingStatus('processing');
+
+    let originalTranscriptionText = '';
+
+    let finalText = '';
+    let enhancementAttempted = false;
+    let finalPromptRendered: string | null = null;
+
+    try {
+        if (_getProcessingCancelledFlag()) {
+            logger.info('Processing cancelled by Escape before transcription.');
+            return;
+        }
+
+        const audioBuffer = Buffer.from(audio.audioData);
+        originalTranscriptionText = await transcriptionManager.transcribe(audioBuffer, audio.mimeType, undefined);
+        finalText = originalTranscriptionText;
+        logger.info(`IPC: Transcription successful: "${originalTranscriptionText}"`);
+
+        if (_getProcessingCancelledFlag()) {
+            logger.info('Processing cancelled by Escape after transcription.');
+            return;
+        }
+
+        const enhancementSettings = store.get('enhancements') as EnhancementSettings;
+        if (enhancementManager && enhancementSettings.enabled && !_getProcessingCancelledFlag()) {
+            enhancementAttempted = true;
+            try {
+                logger.info('Applying enhancement...');
+                 const activePromptId = enhancementSettings.activePromptId;
+                 const customPrompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
+                 const activePrompt = customPrompts.find(p => p.id === activePromptId);
+
+                 const activeTemplate = activePromptId === 'default'
+                     ? getDefaultPromptTemplate()
+                     : activePrompt?.template ?? getDefaultPromptTemplate();
+
+                 const contextData: { [key: string]: any } = { transcription: originalTranscriptionText };
+                 if (enhancementSettings.useContextScreen) {
+                   contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
+                 }
+                 if (enhancementSettings.useContextInputField) {
+                   contextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
+                 }
+                 if (enhancementSettings.useContextClipboard) {
+                   contextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
+                 }
+                 if (enhancementSettings.useDictionaryWordList) {
+                   const dictionaryWords = store.get('dictionary.words', []) as string[];
+                   contextData.dictionary_word_list = dictionaryWords.join(', ');
+                 }
+
+                 try {
+                     finalPromptRendered = Mustache.render(activeTemplate, contextData);
+                     logger.debug(`IPC: Rendered prompt for history: ${finalPromptRendered.substring(0,100)}...`);
+                 } catch (renderError) {
+                     logger.error('IPC: Error rendering prompt for history:', renderError);
+                     finalPromptRendered = activeTemplate;
+                 }
+
+                 const enhancedTextResult = await enhancementManager.enhance(originalTranscriptionText);
+
+                 if (enhancedTextResult !== originalTranscriptionText) {
+                     logger.info(`IPC: Enhancement successful: "${enhancedTextResult}"`);
+                     finalText = enhancedTextResult;
+                 } else {
+                     logger.info('Enhancement did not modify the text.');
+                 }
+            } catch (enhancementError) {
+                logger.error('Enhancement step failed:', enhancementError);
+                finalPromptRendered = null;
+            }
+        } else if (_getProcessingCancelledFlag()) {
+             logger.info('Enhancement skipped due to cancellation.');
+        } else {
+            logger.info('Enhancement disabled or provider is none, skipping.');
+        }
+
+        if (_getProcessingCancelledFlag()) {
+            logger.info('Processing cancelled by Escape before history/paste.');
+            return;
+        }
+
+        try {
+            let promptIdForHistory: string | null = null;
+            if (enhancementAttempted) {
+                promptIdForHistory = store.get('enhancements.activePromptId') as string ?? null;
+            }
+            const historyEntryData: Omit<HistoryRecord, 'id' | 'timestamp'> = {
+                originalText: originalTranscriptionText,
+                renderedPrompt: finalPromptRendered,
+                enhancedText: finalText !== originalTranscriptionText ? finalText : null,
+                promptIdUsed: promptIdForHistory
+            };
+            historyService.addHistoryEntry(historyEntryData);
+        } catch(historyError) {
+             logger.error('Failed to save transcription to history:', historyError);
+        }
+
+        if (_getProcessingCancelledFlag()) {
+            logger.info('Processing cancelled by Escape before sending result/pasting.');
+            return;
+        }
+
+        sendToMain('transcription-result', finalText);
+        _sendRecordingStatus('idle');
+
+        if (store.get('settings.autoPaste', true) && !_getProcessingCancelledFlag()) {
+           logger.info('Auto-paste enabled, writing to clipboard and simulating paste...');
+           clipboard.writeText(finalText);
+           if (process.platform === 'darwin') {
+              const appleScript = `
+                tell application "System Events"
+                  keystroke "v" using command down
+                end tell
+              `;
+              exec(`osascript -e '${appleScript}'`, (error) => {
+                if (error) {
+                  logger.error('Failed to execute paste AppleScript:', error);
+                  sendToMain('transcription-error', 'Transcription complete, but failed to paste.');
+                } else {
+                  logger.info('Paste simulated via AppleScript.');
+                }
+              });
+           } else {
+              logger.warn('Auto-paste simulation not implemented for this platform.');
+              sendToMain('transcription-error', 'Transcription complete, but auto-paste not supported on this OS.');
+           }
+        } else if (_getProcessingCancelledFlag()) {
+            logger.info('Paste skipped due to cancellation.');
+        } else {
+            logger.info('Auto-paste disabled, skipping paste action.');
+        }
+
+    } catch (error: unknown) {
+        if (_getProcessingCancelledFlag()) {
+            logger.info('Processing cancelled by Escape during error handling.');
+            if (mainProcessRecordingStatus !== 'idle') {
+                _sendRecordingStatus('idle');
+            }
+            return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error('IPC: Transcription failed:', message);
+        sendToMain('transcription-error', message);
+        _sendRecordingStatus('error');
+        throw error;
+    }
+}
+
+function handleGetAccessibilityStatus() {
+    if (process.platform === 'darwin') {
+        const isTrusted = systemPreferences.isTrustedAccessibilityClient(false);
+        logger.info(`Accessibility Status Check: ${isTrusted ? 'granted' : 'not granted'}`);
+        return isTrusted ? 'granted' : 'not-granted';
+    }
+    logger.warn('Accessibility status check only available on macOS.');
+    return 'unavailable';
+}
+
+function handleRequestAccessibilityAccess() {
+    if (process.platform === 'darwin') {
+        logger.info('Checking/Requesting Accessibility access (will prompt user if needed)...');
+        const isTrustedNow = systemPreferences.isTrustedAccessibilityClient(true);
+        logger.info(`Accessibility status after check/prompt: ${isTrustedNow}`);
+        return isTrustedNow;
+    }
+    logger.warn('Accessibility access request only available on macOS.');
+    return false;
+}
+
+async function handleGetMediaPermissionStatus(_, mediaType: 'microphone' | 'camera' | 'screen') {
+    if (process.platform !== 'darwin') return 'unavailable';
+    try {
+        const status = systemPreferences.getMediaAccessStatus(mediaType);
+        logger.info(`Media Status Check [${mediaType}]: ${status}`);
+        return status;
+    } catch (error) {
+        logger.error(`Error checking media status [${mediaType}]:`, error);
+        return 'unavailable';
+    }
+}
+
+async function handleRequestMediaPermission(_, mediaType: 'microphone' | 'camera') {
+    if (process.platform !== 'darwin') return false;
+    try {
+        logger.info(`Requesting media access [${mediaType}]...`);
+        const granted = await systemPreferences.askForMediaAccess(mediaType);
+        logger.info(`Media access request result [${mediaType}]: ${granted}`);
+        return granted;
+    } catch (error) {
+        logger.error(`Error requesting media access [${mediaType}]:`, error);
+        return false;
+    }
+}
+
+function handleOpenSettingsURL(_, url: string) {
+    if (process.platform === 'darwin' && url.startsWith('x-apple.systempreferences:')) {
+        logger.info(`Opening settings URL: ${url}`);
+        return shell.openExternal(url);
+    }
+    logger.warn(`Invalid or unsupported settings URL requested: ${url}`);
+    return Promise.resolve();
+}
+
+function handleProcessingCancelledSilence() {
+    logger.info('IPC: Received notification that processing was cancelled due to silence.');
+
+    _sendRecordingStatus('idle');
+
+}
+
+let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
+export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
+    mainProcessRecordingStatus = status;
+}
+
+================
+File: src/main/modules/shortcutManager.ts
+================
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { app } from 'electron';
+import path from 'path';
+import { logger } from '../logger';
+
+export enum ShortcutState {
+    IDLE,
+    RECORDING_POTENTIAL_CLICK_OR_HOLD,
+    WAITING_FOR_SECOND_CLICK,
+    TOGGLE_RECORDING,
+}
+
+let currentState: ShortcutState = ShortcutState.IDLE;
+let keyDownTime: number | null = null;
+let firstClickUpTime: number | null = null;
+let holdTimeoutId: NodeJS.Timeout | null = null;
+let doubleClickTimeoutId: NodeJS.Timeout | null = null;
+let keyMonitorProcess: ChildProcessWithoutNullStreams | null = null;
+let currentlyMonitoredKeys: string[] = [];
+let ignoreNextUpInToggle = false;
+
+const HOLD_DURATION_THRESHOLD = 500;
+const DOUBLE_CLICK_WINDOW = 500;
+
+let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
+let _sendRawShortcutAction: (action: string, keyName: string) => void = () => {};
+let _startRecording: () => void = () => {};
+let _stopRecording: () => void = () => {};
+let _cancelRecording: () => void = () => {};
+let _notifyProcessingCancelledByEscape: () => void = () => {};
+
+export function initializeShortcutManager(dependencies: {
+    sendRecordingStatus: typeof _sendRecordingStatus;
+    sendRawShortcutAction: typeof _sendRawShortcutAction;
+    startRecording: typeof _startRecording;
+    stopRecording: typeof _stopRecording;
+    cancelRecording: typeof _cancelRecording;
+    notifyProcessingCancelledByEscape: typeof _notifyProcessingCancelledByEscape;
+}): void {
+    _sendRecordingStatus = dependencies.sendRecordingStatus;
+    _sendRawShortcutAction = dependencies.sendRawShortcutAction;
+    _startRecording = dependencies.startRecording;
+    _stopRecording = dependencies.stopRecording;
+    _cancelRecording = dependencies.cancelRecording;
+    _notifyProcessingCancelledByEscape = dependencies.notifyProcessingCancelledByEscape;
+    logger.info('Shortcut Manager initialized with dependencies.');
+}
+
+function resetShortcutState(): void {
+    logger.debug("Resetting shortcut state machine to IDLE.");
+    currentState = ShortcutState.IDLE;
+    keyDownTime = null;
+    firstClickUpTime = null;
+    if (holdTimeoutId) clearTimeout(holdTimeoutId);
+    holdTimeoutId = null;
+    if (doubleClickTimeoutId) clearTimeout(doubleClickTimeoutId);
+    doubleClickTimeoutId = null;
+    ignoreNextUpInToggle = false;
+}
+
+function handleKeyEvent(keyName: string, type: 'DOWN' | 'UP'): void {
+    const now = Date.now();
+    logger.debug(`Key Event: ${keyName}_${type} | Current State: ${ShortcutState[currentState]} | Main Status: ${mainProcessRecordingStatus}`);
+
+    if (type === 'DOWN') {
+        if (mainProcessRecordingStatus !== 'idle') {
+            logger.debug(`Ignoring Key Down ${keyName} because main status is 'processing'.`);
+            return;
+        }
+
+        if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
+            if (doubleClickTimeoutId) clearTimeout(doubleClickTimeoutId);
+            doubleClickTimeoutId = null;
+
+            if (now - (firstClickUpTime ?? 0) < DOUBLE_CLICK_WINDOW) {
+                logger.info(`Double Click Detected on ${keyName}. Starting Toggle Recording.`);
+                _sendRawShortcutAction('doubleClickStartToggle', keyName);
+                currentState = ShortcutState.TOGGLE_RECORDING;
+                ignoreNextUpInToggle = true;
+                _startRecording();
+                _sendRecordingStatus('recording');
+            } else {
+                logger.debug(`Second click on ${keyName} too late. Treating as new press.`);
+                currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
+                keyDownTime = now;
+                _startRecording();
+                _sendRecordingStatus('recording');
+            }
+        } else if (currentState === ShortcutState.IDLE) {
+            logger.debug(`Key Down ${keyName} - Starting immediate recording (Potential Click/Hold).`);
+            currentState = ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD;
+            keyDownTime = now;
+            _startRecording();
+            _sendRecordingStatus('recording');
+        } else {
+            logger.debug(`Ignoring duplicate Key Down ${keyName} in state ${ShortcutState[currentState]}.`);
+        }
+    } else {
+        if (keyDownTime === null && currentState !== ShortcutState.TOGGLE_RECORDING) {
+             logger.debug(`Ignoring Key Up ${keyName} - keyDownTime is null or state is unexpected (${ShortcutState[currentState]}).`);
+             return;
+        }
+
+        const duration = keyDownTime ? now - keyDownTime : 0;
+        logger.debug(`Key Up ${keyName}. Duration: ${duration}ms. State: ${ShortcutState[currentState]}`);
+
+        if (currentState === ShortcutState.RECORDING_POTENTIAL_CLICK_OR_HOLD) {
+            if (duration < HOLD_DURATION_THRESHOLD) {
+                logger.info(`Quick Click Detected on ${keyName}. Cancelling recording.`);
+                _sendRawShortcutAction('clickCancel', keyName);
+                _cancelRecording();
+                logger.debug(`Waiting for potential second click...`);
+                currentState = ShortcutState.WAITING_FOR_SECOND_CLICK;
+                firstClickUpTime = now;
+
+                if (doubleClickTimeoutId) clearTimeout(doubleClickTimeoutId);
+                doubleClickTimeoutId = setTimeout(() => {
+                    if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
+                        logger.debug(`Double click timeout expired for ${keyName}. Confirmed single click (ignored). Resetting to IDLE.`);
+                        resetShortcutState();
+                        _sendRecordingStatus('idle');
+                    }
+                }, DOUBLE_CLICK_WINDOW);
+
+            } else {
+                logger.info(`Hold Released ${keyName}. Stopping PTT Recording.`);
+                _sendRawShortcutAction('holdEnd', keyName);
+                _stopRecording();
+                _sendRecordingStatus('processing');
+                resetShortcutState();
+            }
+        } else if (currentState === ShortcutState.TOGGLE_RECORDING) {
+            if (ignoreNextUpInToggle) {
+                logger.debug('Ignoring UP event immediately after double-click confirmation.');
+                ignoreNextUpInToggle = false;
+            } else {
+                logger.info(`Stopping Toggle Recording due to UP event.`);
+                _sendRawShortcutAction('toggleStop', keyName);
+                _stopRecording();
+                _sendRecordingStatus('processing');
+                resetShortcutState();
+            }
+        } else {
+             logger.debug(`Ignoring Key Up ${keyName} in state ${ShortcutState[currentState]}.`);
+        }
+    }
+}
+
+function handleEscapeKey(): void {
+    logger.info('Escape key pressed (from Swift).');
+    const currentStatus = mainProcessRecordingStatus;
+
+    if (currentStatus === 'recording') {
+        logger.info('🔴 Cancelling active recording via Escape key.');
+        _cancelRecording();
+        resetShortcutState();
+        _sendRecordingStatus('idle');
+    } else if (currentStatus === 'processing') {
+        logger.info('🟡 Cancelling ongoing processing via Escape key.');
+        _notifyProcessingCancelledByEscape();
+        resetShortcutState();
+        _sendRecordingStatus('idle');
+    } else if (currentState === ShortcutState.WAITING_FOR_SECOND_CLICK) {
+         logger.info('🟡 Cancelling wait for double-click via Escape key.');
+         resetShortcutState();
+         _sendRecordingStatus('idle');
+    } else {
+        logger.debug('Escape pressed, but not in a cancellable state.');
+    }
+}
+
+export function startKeyMonitor(keysToWatch: string[]): void {
+    if (keyMonitorProcess) {
+        logger.debug('Stopping existing key monitor before starting new one...');
+        stopKeyMonitor();
+    }
+
+    if (!keysToWatch || keysToWatch.length === 0) {
+        logger.info("No keys specified to monitor. Key monitor not started.");
+        currentlyMonitoredKeys = [];
+        resetShortcutState();
+        return;
+    }
+
+    const basePath = app.isPackaged
+        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources')
+        : path.join(app.getAppPath(), 'resources');
+    const executablePath = path.join(basePath, 'key-monitor');
+
+    logger.info(`Attempting to start key monitor at: ${executablePath} with keys: ${keysToWatch.join(', ')}`);
+    currentlyMonitoredKeys = [...keysToWatch];
+    resetShortcutState();
+
+    try {
+        keyMonitorProcess = spawn(executablePath, keysToWatch);
+
+        keyMonitorProcess.stdout.on('data', (data: Buffer) => {
+            const messages = data.toString().trim().split('\n');
+            messages.forEach(message => {
+                if (!message) return;
+
+                if (message === 'ESCAPE_DOWN') {
+                    handleEscapeKey();
+                    return;
+                }
+
+                const parts = message.split('_');
+                if (parts.length === 2) {
+                    const keyName = parts[0];
+                    const type = parts[1] as 'DOWN' | 'UP';
+                    if ((type === 'DOWN' || type === 'UP') && currentlyMonitoredKeys.includes(keyName) && keyName !== 'ESCAPE') {
+                        handleKeyEvent(keyName, type);
+                    } else if (!currentlyMonitoredKeys.includes(keyName)) {
+                        logger.warn(`Received event for unexpected key: ${keyName}`);
+                    }
+                } else if (message.startsWith('Monitoring') || message.startsWith('Event tap created')) {
+                    logger.debug(`Key Monitor Helper: ${message}`);
+                } else {
+                     logger.warn(`Received unknown message from key monitor: ${message}`);
+                }
+            });
+        });
+
+        keyMonitorProcess.stderr.on('data', (data: Buffer) => {
+            logger.error(`Key Monitor Error: ${data.toString().trim()}`);
+        });
+
+        keyMonitorProcess.on('close', (code) => {
+            logger.warn(`Key monitor process exited with code ${code}`);
+            if (keyMonitorProcess && code !== 0) {
+                logger.info('Attempting to restart key monitor...');
+                setTimeout(() => startKeyMonitor(currentlyMonitoredKeys), 5000);
+            } else {
+                keyMonitorProcess = null;
+                currentlyMonitoredKeys = [];
+                resetShortcutState();
+            }
+        });
+
+        keyMonitorProcess.on('error', (err) => {
+            logger.error('Failed to start key monitor process:', err);
+            keyMonitorProcess = null;
+            currentlyMonitoredKeys = [];
+            resetShortcutState();
+        });
+
+    } catch (error) {
+        logger.error('Error spawning key monitor process:', error);
+        keyMonitorProcess = null;
+        currentlyMonitoredKeys = [];
+        resetShortcutState();
+    }
+}
+
+export function stopKeyMonitor(): void {
+    if (keyMonitorProcess) {
+        logger.info('Stopping key monitor process...');
+        keyMonitorProcess.removeAllListeners();
+        keyMonitorProcess.kill();
+        keyMonitorProcess = null;
+        currentlyMonitoredKeys = [];
+        resetShortcutState();
+        logger.info('Key monitor stopped.');
+    }
+}
+
+let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
+export function updateMainProcessStatus(status: typeof mainProcessRecordingStatus): void {
+    mainProcessRecordingStatus = status;
+}
+
+================
+File: src/main/modules/windowManager.ts
+================
+import { app, BrowserWindow, screen, shell } from 'electron';
+import { join } from 'path';
+import { is } from '@electron-toolkit/utils';
+import { logger } from '../logger';
+
+let mainWindow: BrowserWindow | null = null;
+let widgetWindow: BrowserWindow | null = null;
+
+export function getMainWindow(): BrowserWindow | null {
+    return mainWindow;
+}
+
+export function getWidgetWindow(): BrowserWindow | null {
+    return widgetWindow;
+}
+
+export function createMainWindow(): BrowserWindow {
+    mainWindow = new BrowserWindow({
+        width: 900,
+        height: 670,
+        show: false,
+        autoHideMenuBar: true,
+        webPreferences: {
+            preload: join(app.getAppPath(), './out/preload/index.js'),
+            sandbox: false,
+            contextIsolation: true
+        }
+    });
+
+    mainWindow.webContents.setWindowOpenHandler((details) => {
+        shell.openExternal(details.url);
+        return { action: 'deny' };
+    });
+
+    const mainWindowPath = join(app.getAppPath(), './out/renderer/index.html');
+    const mainWindowUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
+        ? process.env['ELECTRON_RENDERER_URL']
+        : mainWindowPath;
+    if (is.dev) {
+        mainWindow.loadURL(mainWindowUrl);
+        mainWindow.webContents.openDevTools({ mode: 'detach' });
+    } else {
+        mainWindow.loadFile(mainWindowPath);
+    }
+
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
+    return mainWindow;
+}
+
+export function createWidgetWindow(): BrowserWindow | null {
+    if (widgetWindow) {
+        widgetWindow.focus();
+        return widgetWindow;
+    }
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: displayWidth, height: displayHeight } = primaryDisplay.workAreaSize;
+
+    const widgetWidth = 320;
+    const widgetHeight = 100;
+
+    const x = Math.round((displayWidth - widgetWidth) / 2);
+    const y = Math.round(displayHeight - widgetHeight - 40);
+
+    widgetWindow = new BrowserWindow({
+        width: widgetWidth,
+        height: widgetHeight,
+        x: x,
+        y: y,
+        show: true,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: false,
+        skipTaskbar: true,
+        focusable: false,
+        webPreferences: {
+            preload: join(app.getAppPath(), './out/preload/widget.js'),
+            sandbox: false,
+            contextIsolation: true,
+        }
+    });
+
+    setWidgetClickThrough(true);
+
+    let loadPath: string;
+    let isUrl = false;
+
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+        const devServerUrl = new URL(process.env['ELECTRON_RENDERER_URL']);
+        devServerUrl.pathname = 'widget.html';
+        loadPath = devServerUrl.toString();
+        isUrl = true;
+    } else {
+        loadPath = join(app.getAppPath(), './out/renderer/widget.html');
+        isUrl = false;
+    }
+
+    if (isUrl) {
+        widgetWindow.loadURL(loadPath).catch(err => {
+            logger.error('Failed to load widget URL:', err);
+        });
+    } else {
+        widgetWindow.loadFile(loadPath).catch(err => {
+            logger.error('Failed to load widget URL:', err);
+        });
+    }
+
+    widgetWindow.on('closed', () => {
+        widgetWindow = null;
+    });
+
+    widgetWindow.on('focus', () => {
+        focusMainWindow();
+    });
+
+    return widgetWindow;
+}
+
+export function setWidgetClickThrough(ignore: boolean): void {
+    if (widgetWindow && !widgetWindow.isDestroyed()) {
+        widgetWindow.setIgnoreMouseEvents(ignore, { forward: ignore });
+    }
+}
+
+export function focusMainWindow(): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.focus();
+    }
+}
+
+export function closeAllWindows(): void {
+    if (widgetWindow && !widgetWindow.isDestroyed()) {
+        widgetWindow.close();
+        widgetWindow = null;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.close();
+        mainWindow = null;
+    }
+}
+
+export function sendToWidget(channel: string, ...args: any[]): void {
+    if (widgetWindow && !widgetWindow.isDestroyed()) {
+        widgetWindow.webContents.send(channel, ...args);
+    }
+}
+
+export function sendToMain(channel: string, ...args: any[]): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(channel, ...args);
+    }
+}
+
+================
+File: src/main/transcription/DeepgramService.ts
+================
+import { createClient } from '@deepgram/sdk';
+import { TranscriptionService } from './TranscriptionService';
+import store from '../store';
+import { logger } from '../logger';
+
+export class DeepgramService implements TranscriptionService {
+  private client: ReturnType<typeof createClient> | null = null;
+
+  constructor() {
+    this.initializeClient();
+    store.onDidChange('transcription', (newValue, oldValue) => {
+      if (newValue?.provider === 'deepgram' && newValue?.deepgramApiKey !== oldValue?.deepgramApiKey) {
+        logger.info('Transcription settings changed, re-initializing Deepgram client.');
+        this.initializeClient();
+      } else if (newValue?.provider !== 'deepgram' && this.client !== null) {
+        logger.info('Transcription provider changed away from Deepgram, disabling client.');
+        this.client = null;
+      }
+    });
+  }
+
+  private initializeClient(): void {
+    const provider = store.get('transcription.provider');
+    if (provider !== 'deepgram') {
+      this.client = null;
+      logger.info(`Deepgram provider not selected (current: ${provider}). Deepgram client not initialized.`);
+      return;
+    }
+    const apiKey = store.get('transcription.deepgramApiKey') as string | undefined;
+    if (apiKey) {
+      try {
+        this.client = createClient(apiKey);
+        logger.info('Deepgram client initialized with API key.');
+      } catch (error) {
+        this.client = null;
+        logger.error('Error initializing Deepgram client:', error);
+      }
+    } else {
+      this.client = null;
+      logger.warn('Deepgram API key not found in settings. Deepgram client not initialized.');
+    }
+  }
+
+  async transcribe(audioBuffer: Buffer, mimeType: string, language?: string): Promise<string> {
+    if (!this.client) {
+      logger.error('Deepgram client not initialized. Cannot transcribe.');
+      throw new Error('Deepgram client not initialized. API key might be missing.');
+    }
+
+    try {
+      logger.info(`Sending audio buffer to Deepgram API for transcription... (MIME type: ${mimeType}, Buffer size: ${audioBuffer.length} bytes)`);
+      const modelName = store.get('transcription.deepgramModel', 'nova-3');
+      logger.info(`Using Deepgram transcription model: ${modelName}`);
+      const options: Record<string, any> = {
+        model: modelName,
+        detect_language: true,
+        smart_format: true
+      };
+
+      if (language) {
+        options.language = language;
+      }
+
+      logger.info(`Audio format: ${mimeType}, sending ${audioBuffer.byteLength} bytes to Deepgram`);
+      const { result, error } = await this.client.listen.prerecorded.transcribeFile(
+        audioBuffer,
+        options
+      );
+      if (error) {
+        logger.error('Deepgram API returned an error:', error);
+        throw new Error(`Deepgram API error: ${error.message}`);
+      }
+      if (!result) {
+        logger.error('No result returned from Deepgram API');
+        throw new Error('No result returned from Deepgram API');
+      }
+      const transcript = result.results?.channels[0]?.alternatives[0]?.transcript || '';
+      if (transcript) {
+        logger.info(`Transcription received from Deepgram: "${transcript.substring(0, 50)}${transcript.length > 50 ? '...' : ''}"`);
+      } else {
+        logger.warn('Deepgram returned empty transcript');
+      }
+      return transcript;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Error during Deepgram transcription:', error);
+      throw new Error(`Deepgram transcription failed: ${message}`);
+    }
+  }
+}
+
+================
+File: src/main/transcription/OpenaiWhisperService.ts
+================
+import OpenAI from 'openai'
+import { TranscriptionService } from './TranscriptionService'
+import store from '../store'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { logger } from '../logger'
+
+export class OpenaiWhisperService implements TranscriptionService {
+  private openai: OpenAI | null = null
+
+  constructor() {
+    this.initializeClient()
+    store.onDidChange('transcription', (newValue, oldValue) => {
+      if (newValue?.provider === 'openai' && newValue?.openaiApiKey !== oldValue?.openaiApiKey) {
+         logger.info('Transcription settings changed, re-initializing OpenAI client.');
+         this.initializeClient();
+      } else if (newValue?.provider !== 'openai' && this.openai !== null) {
+        logger.info('Transcription provider changed away from OpenAI, disabling client.');
+        this.openai = null;
+      }
+    })
+  }
+
+  private initializeClient(): void {
+    const provider = store.get('transcription.provider');
+    if (provider !== 'openai') {
+        this.openai = null;
+        logger.info(`OpenAI provider not selected (current: ${provider}). OpenAI client not initialized.`);
+        return;
+    }
+    const apiKey = store.get('transcription.openaiApiKey') as string | undefined
+    if (apiKey) {
+      this.openai = new OpenAI({ apiKey });
+      logger.info('OpenAI client initialized with API key.')
+    } else {
+      this.openai = null;
+      logger.warn('OpenAI API key not found in settings. OpenAI client not initialized.')
+    }
+  }
+
+  private getExtensionFromMimeType(mimeType: string): string | null {
+    const mimeMap: { [key: string]: string } = {
+      'audio/webm': 'webm',
+      'audio/webm;codecs=opus': 'webm',
+      'audio/wav': 'wav',
+      'audio/mp4': 'mp4',
+      'audio/mp3': 'mp3',
+      'audio/mpeg': 'mpeg',
+      'audio/mpga': 'mpga',
+      'audio/aac': 'm4a',
+      'audio/x-m4a': 'm4a',
+      'audio/m4a': 'm4a',
+      'audio/ogg': 'ogg',
+      'audio/ogg;codecs=opus': 'ogg',
+    };
+
+    const baseMimeType = mimeType.split(';')[0];
+
+    if (mimeMap[baseMimeType]) {
+      return mimeMap[baseMimeType];
+    }
+
+    logger.warn(`Could not determine file extension for MIME type: ${mimeType}`);
+    return null;
+  }
+
+  async transcribe(audioBuffer: Buffer, mimeType: string, language?: string): Promise<string> {
+    if (!this.openai) {
+      logger.error('OpenAI client not initialized. Cannot transcribe.')
+      throw new Error('OpenAI client not initialized. API key might be missing.')
+    }
+
+    const extension = this.getExtensionFromMimeType(mimeType);
+    if (!extension) {
+        logger.error(`Unsupported MIME type for OpenAI transcription: ${mimeType}`);
+        throw new Error(`Unsupported audio format: ${mimeType}`);
+    }
+
+    const tempFilePath = path.join(os.tmpdir(), `vox-audio-${Date.now()}.${extension}`);
+
+    try {
+      logger.info(`Writing audio buffer to temporary file: ${tempFilePath}`)
+      await fs.promises.writeFile(tempFilePath, audioBuffer)
+
+      logger.info(`Sending audio file to OpenAI Whisper API for transcription...`)
+      const model = store.get('transcription.openaiModel', 'gpt-4o-mini-transcribe');
+      logger.info(`Using OpenAI transcription model: ${model}`)
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: fs.createReadStream(tempFilePath),
+        model: model,
+        language: language
+      })
+      logger.info(`Transcription received from OpenAI: "${transcription.text}"`)
+
+      return transcription.text
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Error during OpenAI transcription:', error)
+      throw new Error(`OpenAI transcription failed: ${message}`)
+    } finally {
+      try {
+        await fs.promises.unlink(tempFilePath);
+        logger.info(`Temporary audio file deleted: ${tempFilePath}`)
+      } catch (cleanupError) {
+        logger.error(`Failed to delete temporary audio file ${tempFilePath}:`, cleanupError)
+      }
+    }
+  }
+}
+
+================
+File: src/main/transcription/TranscriptionManager.ts
+================
+import { TranscriptionService } from './TranscriptionService'
+import { OpenaiWhisperService } from './OpenaiWhisperService'
+import { DeepgramService } from './DeepgramService'
+import store from '../store'
+import { logger } from '../logger'
+
+type TranscriptionMode = 'openai' | 'deepgram'
+
+export class TranscriptionManager {
+  private services: Map<TranscriptionMode, TranscriptionService>
+  private currentMode: TranscriptionMode | null = null
+
+  constructor() {
+    this.services = new Map()
+    this.services.set('openai', new OpenaiWhisperService())
+    this.services.set('deepgram', new DeepgramService())
+    this.updateModeFromSettings()
+    store.onDidChange('transcription', (newValue, oldValue) => {
+      const providerChanged = newValue?.provider !== oldValue?.provider;
+
+      if (providerChanged) {
+          logger.info('Transcription settings changed, updating manager.')
+          this.updateModeFromSettings()
+       }
+    })
+  }
+
+  private updateModeFromSettings(): void {
+    const modeFromSettings = store.get('transcription.provider') as TranscriptionMode | undefined
+    if (modeFromSettings && this.services.has(modeFromSettings)) {
+      this.currentMode = modeFromSettings
+      logger.info(`TranscriptionManager mode set to: ${this.currentMode}`)
+    } else {
+      this.currentMode = null
+      logger.warn(`TranscriptionManager: Configured mode "${modeFromSettings}" is not available or invalid. No active transcription service.`)
+    }
+  }
+
+  public async transcribe(audioBuffer: Buffer, mimeType: string, language?: string): Promise<string> {
+    if (!this.currentMode) {
+      logger.error('TranscriptionManager: No active transcription mode set.')
+      throw new Error('No active transcription mode configured.')
+    }
+
+    const service = this.services.get(this.currentMode)
+    if (!service) {
+      logger.error(`TranscriptionManager: Service for mode "${this.currentMode}" not found.`)
+      throw new Error(`Internal error: Service for mode ${this.currentMode} not found.`)
+    }
+
+    logger.info(`TranscriptionManager: Delegating transcription to ${this.currentMode} service with type ${mimeType}.`)
+    try {
+      const result = await service.transcribe(audioBuffer, mimeType, language)
+      logger.info(`TranscriptionManager: Received result from ${this.currentMode} service.`)
+      return result
+    } catch (error) {
+      logger.error(`TranscriptionManager: Error during transcription via ${this.currentMode} service:`, error)
+      throw error
+    }
+  }
+}
+
+================
+File: src/main/transcription/TranscriptionService.ts
+================
+export interface TranscriptionService {
+  transcribe(audioBuffer: Buffer, mimeType: string, language?: string): Promise<string>
+}
+
+================
+File: src/main/historyService.ts
+================
+import Database from 'better-sqlite3';
+import path from 'path';
+import { app } from 'electron';
+import fs from 'fs';
+import { logger } from './logger';
+import store, { type EnhancementPrompt } from './store';
+
+export interface HistoryRecord {
+  id: string;
+  timestamp: number;
+  originalText: string;
+  renderedPrompt: string | null;
+  enhancedText: string | null;
+  promptIdUsed: string | null;
+  promptNameUsed?: string | null;
+}
+
+export interface PaginatedHistory {
+  entries: HistoryRecord[];
+  totalEntries: number;
+  totalPages: number;
+  currentPage: number;
+}
+
+const dbPath = path.join(app.getPath('userData'), 'transcription_history.db');
+let db: Database.Database;
+
+try {
+    const dbDir = path.dirname(dbPath);
+    if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+        logger.info(`Created database directory: ${dbDir}`);
+    }
+} catch (error) {
+    logger.error('Failed to create database directory:', error);
+}
+
+try {
+    db = new Database(dbPath, { verbose: logger.debug });
+    logger.info(`Database initialized at: ${dbPath}`);
+} catch (error) {
+    logger.error('Failed to initialize database:', error);
+}
+
+function initializeSchema(): void {
+    if (!db) return;
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS history (
+                id TEXT PRIMARY KEY,
+                timestamp INTEGER NOT NULL,
+                originalText TEXT NOT NULL,
+                renderedPrompt TEXT,
+                enhancedText TEXT,
+                promptIdUsed TEXT
+            );
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history (timestamp);`);
+
+        const columns = db.pragma('table_info(history)');
+        const hasRenderedPrompt = columns.some((col: any) => col.name === 'renderedPrompt');
+        if (!hasRenderedPrompt) {
+            db.exec('ALTER TABLE history ADD COLUMN renderedPrompt TEXT;');
+            logger.info('Added renderedPrompt column to history table.');
+        }
+
+        logger.info('Database schema initialized successfully.');
+    } catch (error) {
+        logger.error('Failed to initialize database schema:', error);
+    }
+}
+
+initializeSchema();
+
+export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'>): void {
+    if (!db) {
+        logger.error('Cannot add history entry: Database not initialized.');
+        return;
+    }
+    const timestamp = Date.now();
+    const id = `${timestamp}-${Math.random().toString(36).substring(2, 8)}`;
+    const sql = `
+        INSERT INTO history (id, timestamp, originalText, renderedPrompt, enhancedText, promptIdUsed)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `;
+    try {
+        const stmt = db.prepare(sql);
+        stmt.run(
+            id,
+            timestamp,
+            entry.originalText,
+            entry.renderedPrompt ?? null,
+            entry.enhancedText ?? null,
+            entry.promptIdUsed ?? null
+        );
+        logger.info(`Added history entry: ${id}`);
+    } catch (error) {
+        logger.error('Failed to add history entry:', error);
+    }
+}
+
+export function getHistoryEntries(page = 1, pageSize = 10): PaginatedHistory | null {
+     if (!db) {
+        logger.error('Cannot get history entries: Database not initialized.');
+        return null;
+    }
+    try {
+        const countResult = db.prepare('SELECT COUNT(*) as count FROM history').get() as { count: number };
+        const totalEntries = countResult.count;
+        const totalPages = Math.ceil(totalEntries / pageSize);
+        const currentPage = Math.max(1, Math.min(page, totalPages));
+        const offset = (currentPage - 1) * pageSize;
+
+        const sql = `
+            SELECT * FROM history
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+        `;
+        const stmt = db.prepare(sql);
+        let entries = stmt.all(pageSize, offset) as HistoryRecord[];
+
+        const prompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
+        const promptMap = new Map(prompts.map(p => [p.id, p.name]));
+
+        entries = entries.map(entry => {
+            let promptName: string | null = null;
+            if (entry.promptIdUsed === 'default') {
+                promptName = 'Default Prompt';
+            } else if (entry.promptIdUsed) {
+                promptName = promptMap.get(entry.promptIdUsed) ?? 'Deleted Prompt';
+            }
+            return { ...entry, promptNameUsed: promptName };
+        });
+
+        logger.info(`Fetched history page ${currentPage}/${totalPages} (${entries.length} entries with prompt names)`);
+
+        return {
+            entries,
+            totalEntries,
+            totalPages,
+            currentPage,
+        };
+    } catch (error) {
+        logger.error('Failed to fetch history entries:', error);
+        return null;
+    }
+}
+
+export function deleteHistoryEntry(id: string): boolean {
+     if (!db) {
+        logger.error('Cannot delete history entry: Database not initialized.');
+        return false;
+    }
+    const sql = 'DELETE FROM history WHERE id = ?';
+    try {
+        const stmt = db.prepare(sql);
+        const result = stmt.run(id);
+        logger.info(`Deleted history entry ${id}. Changes: ${result.changes}`);
+        return result.changes > 0;
+    } catch (error) {
+        logger.error(`Failed to delete history entry ${id}:`, error);
+        return false;
+    }
+}
+
+export function clearAllHistory(): boolean {
+     if (!db) {
+        logger.error('Cannot clear history: Database not initialized.');
+        return false;
+    }
+    const sql = 'DELETE FROM history';
+    try {
+        const stmt = db.prepare(sql);
+        const result = stmt.run();
+        logger.info(`Cleared all history entries. Changes: ${result.changes}`);
+        return true;
+    } catch (error) {
+        logger.error('Failed to clear history:', error);
+        return false;
+    }
+}
+
+app.on('before-quit', () => {
+    if (db && db.open) {
+        logger.info('Closing database connection.');
+        db.close();
+    }
+});
+
+================
+File: src/main/index.ts
+================
+import { app, Tray, Menu, nativeImage } from 'electron';
+import path from 'path';
+import fs from 'fs';
+import { electronApp, optimizer } from '@electron-toolkit/utils';
+import store from './store';
+import { logger, setupRendererLogger } from './logger';
+import { TranscriptionManager } from './transcription/TranscriptionManager';
+import { EnhancementManager } from './enhancement/EnhancementManager';
+import * as WindowManager from './modules/windowManager';
+import * as ShortcutManager from './modules/shortcutManager';
+import * as IpcHandlers from './modules/ipcHandlers';
+
+let tray: Tray | null = null;
+let transcriptionManager: TranscriptionManager;
+let enhancementManager: EnhancementManager;
+let processingCancelledByEscape = false;
+
+app.whenReady().then(async () => {
+    logger.info('App ready, initializing...');
+    electronApp.setAppUserModelId('com.electron');
+
+    if (process.platform === 'darwin') {
+      if (app.dock) {
+        app.dock.hide();
+      }
+      logger.info('Dock icon hidden on macOS.');
+    }
+
+    setupRendererLogger();
+
+    transcriptionManager = new TranscriptionManager();
+    enhancementManager = new EnhancementManager();
+    logger.info('Core managers (Transcription, Enhancement) initialized.');
+
+    const sendRecordingStatus = (status: 'idle' | 'recording' | 'processing' | 'error'): void => {
+        logger.info(`[Main] Sending status update: ${status}`);
+        ShortcutManager.updateMainProcessStatus(status);
+        IpcHandlers.updateIpcHandlerStatus(status);
+        WindowManager.sendToMain('recording-status', status);
+        WindowManager.sendToWidget('widget-status-update', status);
+        WindowManager.setWidgetClickThrough(status === 'idle' || status === 'error');
+    };
+
+    const sendRawShortcutAction = (action: string, keyName: string): void => {
+        WindowManager.sendToMain('shortcutAction', action, keyName);
+    };
+
+    const startRecording = (): void => {
+        WindowManager.sendToMain('start-recording');
+    };
+
+    const stopRecording = (): void => {
+        WindowManager.sendToMain('stop-recording');
+    };
+
+    const cancelRecording = (): void => {
+        WindowManager.sendToMain('cancel-recording');
+    };
+
+    const notifyProcessingCancelledByEscape = (): void => {
+        processingCancelledByEscape = true;
+    };
+
+    const getProcessingCancelledFlag = (): boolean => {
+        return processingCancelledByEscape;
+    };
+
+    const setProcessingCancelledFlag = (value: boolean): void => {
+        processingCancelledByEscape = value;
+    };
+
+    ShortcutManager.initializeShortcutManager({
+        sendRecordingStatus,
+        sendRawShortcutAction,
+        startRecording,
+        stopRecording,
+        cancelRecording,
+        notifyProcessingCancelledByEscape,
+    });
+
+    IpcHandlers.initializeIpcHandlers({
+        transcriptionManager,
+        enhancementManager,
+        getProcessingCancelledFlag,
+        setProcessingCancelledFlag,
+        sendRecordingStatus,
+    });
+
+    IpcHandlers.setupIpcHandlers();
+
+    logger.info('Log callback set for IPC communication.');
+
+
+    WindowManager.createMainWindow();
+    WindowManager.createWidgetWindow();
+
+    app.on('browser-window-created', (_, window) => {
+        optimizer.watchWindowShortcuts(window);
+    });
+
+    if (process.platform === 'darwin') {
+        const initialKeys = (store.get('shortcutKeysMapped') as string[] | undefined) || [];
+        logger.info('Starting initial key monitor with keys from store:', initialKeys);
+        ShortcutManager.startKeyMonitor(initialKeys);
+    } else {
+        logger.warn('Key monitor helper is only supported on macOS.');
+    }
+
+    try {
+        const iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, 'icon-tray.png')
+            : path.join(app.getAppPath(), 'resources/icon-tray.png');
+
+        if (!fs.existsSync(iconPath)) {
+            logger.error(`Tray icon not found at: ${iconPath}`);
+        } else {
+            logger.info(`Loading tray icon from: ${iconPath}`);
+            const icon = nativeImage.createFromPath(iconPath);
+            if (icon.isEmpty()) {
+                logger.error('Created nativeImage is empty.');
+            } else {
+                logger.info('nativeImage created successfully.');
+            }
+            if (process.platform === 'darwin') {
+                logger.info('Setting template image for macOS.');
+                icon.setTemplateImage(true);
+            }
+
+            logger.info('Attempting to create Tray object...');
+            tray = new Tray(icon);
+            if (tray) {
+                logger.info('Tray object created successfully.');
+            } else {
+                logger.error('Failed to create Tray object.');
+            }
+
+            logger.info('Building context menu...');
+            const contextMenu = Menu.buildFromTemplate([
+                {
+                    label: 'Show Settings',
+                    click: () => {
+                        let win = WindowManager.getMainWindow();
+                        if (!win || win.isDestroyed()) {
+                            win = WindowManager.createMainWindow();
+                            win.once('ready-to-show', () => {
+                                win?.show();
+                                win?.focus();
+                            });
+                        } else {
+                            win.show();
+                            win.focus();
+                        }
+                    }
+                },
+                { type: 'separator' },
+                {
+                    label: 'Quit Vox Transcriber',
+                    click: () => {
+                        app.quit();
+                    }
+                }
+            ]);
+            logger.info('Context menu built.');
+
+            logger.info('Setting tooltip...');
+            tray.setToolTip('Vox Transcriber');
+            logger.info('Tooltip set.');
+
+            logger.info('Setting context menu...');
+            tray.setContextMenu(contextMenu);
+            logger.info('Context menu set.');
+
+            if (process.platform === 'darwin') {
+                logger.info('Setting up tray click listener for macOS...');
+                tray.on('click', () => {
+                    logger.info('Tray clicked on macOS.');
+                    const win = WindowManager.getMainWindow();
+                    if (win && !win.isDestroyed()) {
+                        if (win.isVisible() && win.isFocused()) {
+                            win.hide();
+                        } else {
+                            win.show();
+                            win.focus();
+                        }
+                    } else {
+                        const newWin = WindowManager.createMainWindow();
+                        newWin.once('ready-to-show', () => {
+                            newWin?.show();
+                            newWin?.focus();
+                        });
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        logger.error('Failed to create Tray icon:', error);
+    }
+
+    app.on('activate', () => {
+        let win = WindowManager.getMainWindow();
+        if (!win || win.isDestroyed()) {
+            win = WindowManager.createMainWindow();
+            win.once('ready-to-show', () => {
+                win?.show();
+                win?.focus();
+            });
+        } else {
+            win.show();
+            win.focus();
+        }
+        if (WindowManager.getWidgetWindow() === null) {
+            WindowManager.createWidgetWindow();
+        }
+    });
+
+    logger.info('App initialization complete.');
+
+}).catch(error => {
+    logger.error('Error during app initialization:', error);
+    app.quit();
+});
+
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+        app.quit();
+    }
+});
+
+app.on('before-quit', () => {
+    ShortcutManager.stopKeyMonitor();
+});
+
+app.on('will-quit', () => {
+    ShortcutManager.stopKeyMonitor();
+});
+
+================
+File: src/main/logger.ts
+================
+import { ipcMain } from 'electron';
+import log from 'electron-log';
+
+log.transports.file.level = 'info';
+log.transports.console.level = 'debug';
+log.initialize();
+
+export function mainLog(level: 'info' | 'warn' | 'error' | 'debug' | 'verbose', message: string, ...args: unknown[]): void {
+  const fullMessage = `[Main] ${message} ${args.map(String).join(' ')}`;
+  log[level](fullMessage);
+}
+
+export function setupRendererLogger(): void {
+  ipcMain.on('logFromRenderer', (_event, level: string, message: string, ...args: unknown[]) => {
+    const validLevels = ['info', 'warn', 'error', 'debug', 'verbose'];
+    const logLevel = validLevels.includes(level) ? level as 'info' | 'warn' | 'error' | 'debug' | 'verbose' : 'info';
+    const fullMessage = `[Renderer] ${message} ${args.map(String).join(' ')}`;
+    log[logLevel](fullMessage);
+  });
+  mainLog('info', 'Renderer logger initialized via IPC.');
+}
+
+export const logger = {
+    info: (message: string, ...args: unknown[]): void => mainLog('info', message, ...args),
+    warn: (message: string, ...args: unknown[]): void => mainLog('warn', message, ...args),
+    error: (message: string, ...args: unknown[]): void => mainLog('error', message, ...args),
+    debug: (message: string, ...args: unknown[]): void => mainLog('debug', message, ...args),
+    verbose: (message: string, ...args: unknown[]): void => mainLog('verbose', message, ...args),
+};
+
+================
+File: src/main/store.ts
+================
+import Store from 'electron-store'
+
+interface DictionarySettings {
+  words: string[]
+}
+
+interface TranscriptionSettings {
+  provider: 'openai' | 'deepgram';
+  openaiApiKey: string;
+  openaiModel: 'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe';
+  deepgramApiKey: string;
+  deepgramModel: 'nova-3' | 'enhanced' | 'whisper-large';
+}
+
+interface EnhancementSettings {
+  enabled: boolean;
+  provider: 'openai' | 'gemini' | 'custom';
+  openaiApiKey: string;
+  openaiModel: 'gpt-4.1' | 'gpt-4.1-mini';
+  openaiBaseUrl?: string;
+  geminiApiKey: string;
+  geminiModel: 'gemini-2.0-flash' | 'gemini-2.5-flash' | 'gemini-2.0-flash-lite';
+  customApiKey: string;
+  customModelName: string;
+  customBaseUrl?: string;
+  activePromptId: string;
+  useTranscript: boolean;
+  useContextScreen: boolean;
+  useContextInputField: boolean;
+  useContextClipboard: boolean;
+  useDictionaryWordList: boolean;
+}
+
+interface EnhancementPrompt {
+  id: string;
+  name: string;
+  template: string;
+}
+
+interface ShortcutSettings {
+  pushToTalk: string
+  toggleRecording: string
+}
+
+interface HistoryEntry {
+  id: string
+  text: string
+  timestamp: number
+  duration: number
+  enhanced: boolean
+}
+
+interface StoreSchema {
+  settings: {
+    theme: 'cupcake' | 'dark';
+    autoPaste: boolean;
+  }
+  dictionary: DictionarySettings
+  transcription: TranscriptionSettings
+  enhancements: EnhancementSettings;
+  enhancementPrompts: EnhancementPrompt[];
+  shortcuts: ShortcutSettings;
+  history: HistoryEntry[];
+}
+
+const store = new Store<StoreSchema>({
+  defaults: {
+    settings: {
+      theme: 'cupcake',
+      autoPaste: true
+    },
+    dictionary: {
+      words: []
+    },
+    transcription: {
+      provider: 'deepgram',
+      openaiApiKey: '',
+      openaiModel: 'gpt-4o-mini-transcribe',
+      deepgramApiKey: '',
+      deepgramModel: 'nova-3'
+    },
+    enhancements: {
+      enabled: false,
+      provider: 'openai',
+      openaiApiKey: '',
+      openaiModel: 'gpt-4.1-mini',
+      openaiBaseUrl: '',
+      geminiApiKey: '',
+      geminiModel: 'gemini-2.0-flash-lite',
+      customApiKey: '',
+      customModelName: '',
+      customBaseUrl: '',
+      activePromptId: 'default',
+      useTranscript: true,
+      useContextScreen: false,
+      useContextInputField: false,
+      useContextClipboard: false,
+      useDictionaryWordList: false
+    },
+    enhancementPrompts: [],
+    shortcuts: {
+        pushToTalk: 'CommandOrControl+Shift+Space',
+        toggleRecording: 'CommandOrControl+Shift+R'
+    },
+    history: []
+  }
+})
+
+export default store
+
+export type { EnhancementSettings, EnhancementPrompt };
+
+================
+File: src/preload/index.d.ts
+================
+import { ElectronAPI } from '@electron-toolkit/preload';
+
+interface HistoryRecord {
+  id: string;
+  timestamp: number;
+  originalText: string;
+  enhancedText: string | null;
+  promptIdUsed: string | null;
+  promptNameUsed: string | null;
+}
+
+interface PaginatedHistory {
+  entries: HistoryRecord[];
+  totalEntries: number;
+  totalPages: number;
+  currentPage: number;
+}
+
+declare global {
+  interface Window {
+    electron: ElectronAPI
+    api: {
+      getStoreValue: (key: string) => Promise<unknown>
+      setStoreValue: (key: string, value: unknown) => Promise<void>,
+      updateMonitoredKeys: (keys: string[]) => Promise<void>,
+      onShortcutAction: (callback: (action: string, keyName: string) => void) => (() => void),
+      onRecordingStateUpdate: (callback: (state: { isRecording: boolean; isToggleMode: boolean }) => void) => (() => void),
+      log: (level: 'info' | 'warn' | 'error' | 'debug' | 'verbose', message: string, ...args: unknown[]) => void,
+      getAccessibilityStatus: () => Promise<'granted' | 'not-granted' | 'unavailable'>,
+      requestAccessibilityAccess: () => Promise<boolean>,
+      getMediaPermissionStatus: (mediaType: 'microphone' | 'camera' | 'screen') => Promise<'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown' | 'unavailable'>,
+      requestMediaPermission: (mediaType: 'microphone' | 'camera') => Promise<boolean>,
+      openSettingsURL: (url: string) => Promise<void>,
+      onStartRecording: (callback: () => void) => (() => void),
+      onStopRecording: (callback: () => void) => (() => void),
+      onCancelRecording: (callback: () => void) => (() => void),
+      updateRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void,
+      transcribeAudio: (audio: { audioData: ArrayBuffer, mimeType: string }) => Promise<void>,
+      onTranscriptionResult: (callback: (text: string) => void) => (() => void),
+      onTranscriptionError: (callback: (error: string) => void) => (() => void),
+      onRecordingStatus: (callback: (status: 'idle' | 'recording' | 'processing' | 'error') => void) => (() => void),
+      getHistory: (page?: number, pageSize?: number) => Promise<PaginatedHistory | null>,
+      deleteHistoryEntry: (id: string) => Promise<boolean>,
+      clearAllHistory: () => Promise<boolean>,
+      notifySilenceCancellation: () => void,
+      notifyRecorderStarted: () => void;
+      getDefaultPromptContent: () => Promise<string>;
+      getLogFilePath: () => Promise<string>;
+      getLogLines: (lineCount?: number) => Promise<string[]>;
+    }
+  }
+}
+
+================
+File: src/preload/index.ts
+================
+import { contextBridge, ipcRenderer } from 'electron'
+import { electronAPI } from '@electron-toolkit/preload'
+
+const api = {
+  getStoreValue: (key: string): Promise<unknown> => ipcRenderer.invoke('getStoreValue', key),
+  setStoreValue: (key: string, value: unknown): Promise<void> =>
+    ipcRenderer.invoke('setStoreValue', key, value),
+  updateMonitoredKeys: (keys: string[]): Promise<void> => ipcRenderer.invoke('updateMonitoredKeys', keys),
+  onShortcutAction: (callback: (action: string, key: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: string, key: string): void => callback(action, key);
+    ipcRenderer.on('shortcutAction', handler);
+    return (): void => {
+      ipcRenderer.removeListener('shortcutAction', handler);
+    };
+  },
+  onRecordingStateUpdate: (callback: (state: { isRecording: boolean; isToggleMode: boolean }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: { isRecording: boolean; isToggleMode: boolean }): void => callback(state);
+      ipcRenderer.on('recordingStateUpdate', handler);
+      return (): void => {
+          ipcRenderer.removeListener('recordingStateUpdate', handler);
+      };
+  },
+  log: (level: string, message: string, ...args: unknown[]): void => {
+      ipcRenderer.send('logFromRenderer', level, message, ...args);
+  },
+  getAccessibilityStatus: (): Promise<'granted' | 'not-granted' | 'unavailable'> => ipcRenderer.invoke('getAccessibilityStatus'),
+  requestAccessibilityAccess: (): Promise<boolean> => ipcRenderer.invoke('requestAccessibilityAccess'),
+  getMediaPermissionStatus: (mediaType: 'microphone' | 'camera' | 'screen'): Promise<'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown' | 'unavailable'> => ipcRenderer.invoke('getMediaPermissionStatus', mediaType),
+  requestMediaPermission: (mediaType: 'microphone' | 'camera'): Promise<boolean> => ipcRenderer.invoke('requestMediaPermission', mediaType),
+  openSettingsURL: (url: string): Promise<void> => ipcRenderer.invoke('openSettingsURL', url),
+  onStartRecording: (callback: () => void) => {
+    const handler = (): void => callback();
+    ipcRenderer.on('start-recording', handler);
+    return (): void => {
+      ipcRenderer.removeListener('start-recording', handler);
+    };
+  },
+  onCancelRecording: (callback: () => void) => {
+    const handler = (): void => callback();
+    ipcRenderer.on('cancel-recording', handler);
+    return (): void => {
+      ipcRenderer.removeListener('cancel-recording', handler);
+    };
+  },
+  onStopRecording: (callback: () => void) => {
+    const handler = (): void => callback();
+    ipcRenderer.on('stop-recording', handler);
+    return (): void => {
+      ipcRenderer.removeListener('stop-recording', handler);
+    };
+  },
+  updateRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error'): void => {
+    ipcRenderer.send('update-recording-status', status);
+  },
+  transcribeAudio: (audio: { audioData: ArrayBuffer, mimeType: string }): Promise<void> => ipcRenderer.invoke('transcribe-audio', audio),
+  onTranscriptionResult: (callback: (text: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, text: string): void => callback(text);
+    ipcRenderer.on('transcription-result', handler);
+    return (): void => {
+      ipcRenderer.removeListener('transcription-result', handler);
+    };
+  },
+  onTranscriptionError: (callback: (error: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, error: string): void => callback(error);
+    ipcRenderer.on('transcription-error', handler);
+    return (): void => {
+      ipcRenderer.removeListener('transcription-error', handler);
+    };
+  },
+  onRecordingStatus: (callback: (status: 'idle' | 'recording' | 'processing' | 'error') => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: 'idle' | 'recording' | 'processing' | 'error'): void => callback(status);
+    ipcRenderer.on('recording-status', handler);
+    return (): void => {
+      ipcRenderer.removeListener('recording-status', handler);
+    };
+  },
+  getHistory: (page?: number, pageSize?: number): Promise<any | null> => ipcRenderer.invoke('getHistory', page, pageSize),
+  deleteHistoryEntry: (id: string): Promise<boolean> => ipcRenderer.invoke('deleteHistoryEntry', id),
+  clearAllHistory: (): Promise<boolean> => ipcRenderer.invoke('clearAllHistory'),
+  notifySilenceCancellation: (): void => ipcRenderer.send('processing-cancelled-silence'),
+  getDefaultPromptContent: (): Promise<string> => ipcRenderer.invoke('getDefaultPromptContent'),
+  getLogFilePath: (): Promise<string> => ipcRenderer.invoke('getLogFilePath'),
+  getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
+  notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
+};
+
+if (process.contextIsolated) {
+  try {
+    contextBridge.exposeInMainWorld('electron', electronAPI)
+    contextBridge.exposeInMainWorld('api', api)
+  } catch (error) {
+    console.error(error)
+  }
+} else {
+  // @ts-ignore (define in dts)
+  window.electron = electronAPI
+  // @ts-ignore (define in dts)
+  window.api = api
+}
+
+================
+File: src/preload/widget.d.ts
+================
+// Define the structure of the API exposed by preload/widget.ts
+export interface WidgetAPI {
+  // Main -> Widget: Receive status updates
+  onStatusUpdate: (callback: (status: 'idle' | 'recording' | 'processing' | 'error') => void) => () => void;
+  stopRecording: () => void;
+      onRecorderStarted: (callback: () => void) => () => void; // Main -> Widget
+}
+
+// Augment the global Window interface
+declare global {
+  interface Window {
+    widgetApi: WidgetAPI;
+  }
+}
+
+// Export an empty object to satisfy ES module requirements if needed by tsconfig
+export {};
+
+================
+File: src/preload/widget.ts
+================
+import { contextBridge, ipcRenderer } from 'electron';
+
+const widgetApi = {
+  onStatusUpdate: (callback: (status: 'idle' | 'recording' | 'processing' | 'error') => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: 'idle' | 'recording' | 'processing' | 'error'): void => {
+      callback(status);
+    };
+    ipcRenderer.on('widget-status-update', handler);
+    return (): void => {
+      ipcRenderer.removeListener('widget-status-update', handler);
+    };
+  },
+  onRecorderStarted: (callback: () => void) => {
+    const handler = (): void => callback();
+    ipcRenderer.on('widget-recorder-started', handler);
+    return (): void => {
+      ipcRenderer.removeListener('widget-recorder-started', handler);
+    };
+  },
+  stopRecording: () => {
+    ipcRenderer.send('widget-stop-recording');
+  }
+};
+
+try {
+  contextBridge.exposeInMainWorld('widgetApi', widgetApi);
+} catch (error) {
+  console.error('Failed to expose Widget API:', error);
+}
+
+================
+File: src/renderer/src/assets/main.css
 ================
 @import 'remixicon/fonts/remixicon.css';
 
@@ -98,7 +2522,7 @@ textarea {
 }
 
 ================
-File: assets/widget.css
+File: src/renderer/src/assets/widget.css
 ================
 @import 'remixicon/fonts/remixicon.css';
 
@@ -112,7 +2536,7 @@ body, html {
 @import "tailwindcss";
 
 ================
-File: components/layout/AppLayout.svelte
+File: src/renderer/src/components/layout/AppLayout.svelte
 ================
 <script lang="ts">
   import StatusIndicator from './StatusIndicator.svelte';
@@ -171,7 +2595,7 @@ File: components/layout/AppLayout.svelte
 </div>
 
 ================
-File: components/layout/StatusIndicator.svelte
+File: src/renderer/src/components/layout/StatusIndicator.svelte
 ================
 <script lang="ts">
   import { recordingStatus, transcriptionResult, transcriptionError } from '../../lib/audioRecorder';
@@ -286,7 +2710,7 @@ File: components/layout/StatusIndicator.svelte
 </div>
 
 ================
-File: components/settings/Dashboard.svelte
+File: src/renderer/src/components/settings/Dashboard.svelte
 ================
 <script lang="ts">
   // Removed incorrect store import
@@ -385,7 +2809,7 @@ File: components/settings/Dashboard.svelte
 </div>
 
 ================
-File: components/settings/Dictionary.svelte
+File: src/renderer/src/components/settings/Dictionary.svelte
 ================
 <script lang="ts">
   import { onMount, tick } from 'svelte'; // Add tick
@@ -538,7 +2962,7 @@ File: components/settings/Dictionary.svelte
   </div>
 
 ================
-File: components/settings/Enhancements.svelte
+File: src/renderer/src/components/settings/Enhancements.svelte
 ================
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -764,10 +3188,11 @@ File: components/settings/Enhancements.svelte
     <div class="bg-base-100 max-w-2xl space-y-6">
 
         <div class="form-control">
-          <label class="label cursor-pointer">
+          <label class="label cursor-pointer" for="enable-enhancements-toggle">
             <span class="label-text font-semibold">Enable Enhancements</span>
             <input
               type="checkbox"
+              id="enable-enhancements-toggle"
               class="toggle toggle-primary"
               bind:checked={$settings.enabled}
             />
@@ -775,8 +3200,8 @@ File: components/settings/Enhancements.svelte
           <p class="text-sm opacity-70 ml-1">
             When enabled, transcriptions can be processed by an LLM to improve formatting, fix grammar, etc.
           </p>
-            <label class="label"><span class="label-text-alt">Must be OpenAI API compatible.</span></label>
-          </div>
+          <label class="label" for="enable-enhancements-toggle"><span class="label-text-alt">Must be OpenAI API compatible.</span></label>
+        </div>
 
         {#if $settings.enabled}
           <div class="divider pt-4">Enhancement Provider</div>
@@ -851,7 +3276,7 @@ File: components/settings/Enhancements.svelte
                     <span class="label-text">Base URL</span>
                   </label>
                   <input id="custom-base-url" type="text" placeholder="eg. https://api.mistral.ai/v1/" class="input input-bordered input-sm w-full" bind:value={$settings.customBaseUrl} />
-                   <label class="label"><span class="label-text-alt text-xs">Must be OpenAI API compatible.</span></label>
+                  <label class="label" for="custom-base-url"><span class="label-text-alt text-xs">Must be OpenAI API compatible.</span></label>
                 </div>
 
                 <div class="form-control">
@@ -916,6 +3341,7 @@ File: components/settings/Enhancements.svelte
                    <button
                      class="btn btn-xs btn-ghost opacity-0 group-hover:opacity-100 transition-opacity"
                      title="View Default Prompt"
+                     aria-label="View Default Prompt"
                      on:click|stopPropagation|preventDefault={() => viewPrompt('default')}
                    >
                      <i class="ri-eye-line"></i>
@@ -930,6 +3356,7 @@ File: components/settings/Enhancements.svelte
                     <button
                       class="btn btn-xs btn-ghost opacity-0 group-hover:opacity-100 transition-opacity mr-1"
                       title="Edit Prompt"
+                      aria-label="Edit Prompt"
                       on:click|stopPropagation|preventDefault={() => editPrompt(prompt)}
                     >
                        <i class="ri-pencil-line"></i>
@@ -938,6 +3365,7 @@ File: components/settings/Enhancements.svelte
                     <button
                       class="btn btn-xs btn-ghost text-error opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Delete Prompt"
+                      aria-label="Delete Prompt"
                       on:click|stopPropagation|preventDefault={() => deletePrompt(prompt.id)}
                     >
                       <i class="ri-delete-bin-line"></i>
@@ -992,11 +3420,11 @@ File: components/settings/Enhancements.svelte
     {#if modalMode === 'view'}
       <div class="space-y-4">
         <div>
-          <label class="label"><span class="label-text font-semibold">Name:</span></label>
+          <div class="label"><span class="label-text font-semibold">Name:</span></div>
           <p class="p-2 bg-base-200 rounded">{currentPrompt.name}</p>
         </div>
         <div>
-          <label class="label"><span class="label-text font-semibold">Template:</span></label>
+          <div class="label"><span class="label-text font-semibold">Template:</span></div>
           <pre class="p-2 bg-base-200 rounded text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">{currentPrompt.template}</pre>
         </div>
       </div>
@@ -1027,7 +3455,7 @@ File: components/settings/Enhancements.svelte
 {/if}
 
 ================
-File: components/settings/History.svelte
+File: src/renderer/src/components/settings/History.svelte
 ================
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
@@ -1312,7 +3740,7 @@ File: components/settings/History.svelte
 </div>
 
 ================
-File: components/settings/Logs.svelte
+File: src/renderer/src/components/settings/Logs.svelte
 ================
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
@@ -1393,7 +3821,7 @@ File: components/settings/Logs.svelte
 </div>
 
 ================
-File: components/settings/Permissions.svelte
+File: src/renderer/src/components/settings/Permissions.svelte
 ================
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -1646,7 +4074,7 @@ File: components/settings/Permissions.svelte
 </div>
 
 ================
-File: components/settings/Shortcuts.svelte
+File: src/renderer/src/components/settings/Shortcuts.svelte
 ================
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
@@ -1794,7 +4222,7 @@ File: components/settings/Shortcuts.svelte
 </div>
 
 ================
-File: components/settings/Transcription.svelte
+File: src/renderer/src/components/settings/Transcription.svelte
 ================
 <script lang="ts">
   import { onMount } from "svelte";
@@ -1913,7 +4341,7 @@ File: components/settings/Transcription.svelte
             class="input input-bordered w-full"
             bind:value={$openaiApiKey}
           />
-          <label class="label">
+          <label class="label" for="openai-api-key">
             <span class="label-text-alt"
               >Required for OpenAI transcription. Get key from <a
                 href="https://platform.openai.com/api-keys"
@@ -1938,7 +4366,7 @@ File: components/settings/Transcription.svelte
             >
             <option value="gpt-4o-transcribe">GPT-4o Transcribe</option>
           </select>
-          <label class="label">
+          <label class="label" for="openai-model-select">
             <span class="label-text-alt">Select the Whisper model to use.</span>
           </label>
         </div>
@@ -1956,7 +4384,7 @@ File: components/settings/Transcription.svelte
             class="input input-bordered w-full"
             bind:value={$deepgramApiKey}
           />
-          <label class="label">
+          <label class="label" for="deepgram-api-key">
             <span class="label-text-alt"
               >Required for Deepgram transcription. Get key from <a
                 href="https://console.deepgram.com/signup"
@@ -1980,7 +4408,7 @@ File: components/settings/Transcription.svelte
             <option value="enhanced">Enhanced</option>
             <option value="whisper-large">Whisper Large</option>
           </select>
-          <label class="label">
+          <label class="label" for="deepgram-model-select">
             <span class="label-text-alt">Select the Deepgram model to use.</span
             >
           </label>
@@ -1991,7 +4419,7 @@ File: components/settings/Transcription.svelte
 </div>
 
 ================
-File: components/WaterWaveAnimation.svelte
+File: src/renderer/src/components/WaterWaveAnimation.svelte
 ================
 <script lang="ts">
   type Status = 'idle' | 'recording' | 'processing';
@@ -2120,7 +4548,7 @@ File: components/WaterWaveAnimation.svelte
 </style>
 
 ================
-File: lib/audioRecorder.ts
+File: src/renderer/src/lib/audioRecorder.ts
 ================
 import { writable } from 'svelte/store';
 
@@ -2472,7 +4900,7 @@ export function get<T>(store: { subscribe: (cb: (value: T) => void) => () => voi
 }
 
 ================
-File: App.svelte
+File: src/renderer/src/App.svelte
 ================
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
@@ -2523,13 +4951,13 @@ File: App.svelte
 </AppLayout>
 
 ================
-File: env.d.ts
+File: src/renderer/src/env.d.ts
 ================
 /// <reference types="svelte" />
 /// <reference types="vite/client" />
 
 ================
-File: main.ts
+File: src/renderer/src/main.ts
 ================
 import { mount } from 'svelte'
 
@@ -2544,7 +4972,7 @@ const app = mount(App, {
 export default app
 
 ================
-File: widget.ts
+File: src/renderer/src/widget.ts
 ================
 import WidgetApp from './WidgetApp.svelte';
 import { mount } from 'svelte';
@@ -2554,7 +4982,7 @@ import './assets/widget.css'
 const app = mount(WidgetApp, { target: document.getElementById("widget-root") });
 
 ================
-File: WidgetApp.svelte
+File: src/renderer/src/WidgetApp.svelte
 ================
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
@@ -2684,6 +5112,383 @@ File: WidgetApp.svelte
   </div>
 </div>
 {/if}
+
+================
+File: src/renderer/index.html
+================
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Electron</title>
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+
+================
+File: src/renderer/widget.html
+================
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vox Recorder Widget</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+      }
+      #widget-root {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="widget-root"></div>
+    <script type="module" src="./src/widget.ts"></script>
+  </body>
+</html>
+
+================
+File: .editorconfig
+================
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+================
+File: .gitignore
+================
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+
+================
+File: .prettierignore
+================
+out
+dist
+pnpm-lock.yaml
+LICENSE.md
+tsconfig.json
+tsconfig.*.json
+
+================
+File: .prettierrc.yaml
+================
+# singleQuote: true
+# semi: false
+# printWidth: 100
+# trailingComma: none
+# plugins:
+#   - prettier-plugin-svelte
+# overrides:
+#   - files: '*.svelte'
+#     options:
+#       parser: svelte
+
+================
+File: dev-app-update.yml
+================
+provider: generic
+url: https://example.com/auto-updates
+updaterCacheDirName: vox-test-updater
+
+================
+File: electron-builder.yml
+================
+appId: nl.marijnbent.vox
+productName: Vox
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/**'
+  - '!**/node_modules/**'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - resources/**
+extraResources:
+  - from: resources/icon-tray.png
+    to: icon-tray.png
+win:
+  executableName: vox
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSMicrophoneUsageDescription: This app requires microphone access to capture audio for transcription.
+    - NSScreenCaptureUsageDescription: This app requires screen capture access for potential future contextual transcription features.
+    - NSAccessibilityUsageDescription: This app requires Accessibility access to enable global keyboard shortcuts.
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+    - snap
+    - deb
+  maintainer: marijnbent.nl
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+publish:
+  provider: generic
+  url: https://example.com/auto-updates
+
+================
+File: electron.vite.config.ts
+================
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+import tailwindcss from '@tailwindcss/vite'
+
+export default defineConfig({
+  main: {
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store'] })]
+  },
+  preload: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: 'src/preload/index.ts', // Default preload
+          widget: 'src/preload/widget.ts' // Widget preload
+        }
+      }
+    },
+    plugins: [externalizeDepsPlugin()]
+  },
+  renderer: {
+    // Specify multiple HTML entry points
+    build: {
+      rollupOptions: {
+        input: {
+          index: 'src/renderer/index.html', // Default entry
+          widget: 'src/renderer/widget.html' // Widget entry
+        }
+      }
+    },
+    plugins: [svelte(), tailwindcss()]
+  }
+})
+
+================
+File: eslint.config.mjs
+================
+import tseslint from '@electron-toolkit/eslint-config-ts'
+import eslintConfigPrettier from '@electron-toolkit/eslint-config-prettier'
+import eslintPluginSvelte from 'eslint-plugin-svelte'
+
+// export default tseslint.config(
+//   { ignores: ['**/node_modules', '**/dist', '**/out'] },
+//   tseslint.configs.recommended,
+//   eslintPluginSvelte.configs['flat/recommended'],
+//   {
+//     files: ['**/*.svelte'],
+//     languageOptions: {
+//       parserOptions: {
+//         parser: tseslint.parser
+//       }
+//     }
+//   },
+//   {
+//     files: ['**/*.{tsx,svelte}'],
+//     rules: {
+//       'svelte/no-unused-svelte-ignore': 'off'
+//     }
+//   },
+//   eslintConfigPrettier
+// )
+
+================
+File: package.json
+================
+{
+  "name": "vox",
+  "version": "0.1.0",
+  "description": "Open-Source Voice Transcription and Assistant",
+  "main": "./out/main/index.js",
+  "author": "example.com",
+  "homepage": "https://electron-vite.org",
+  "scripts": {
+    "format": "prettier --plugin prettier-plugin-svelte --write .",
+    "lint": "eslint --cache .",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "svelte-check": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "npm run typecheck:node && npm run svelte-check",
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@deepgram/sdk": "^3.11.3",
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@tailwindcss/vite": "^4.1.3",
+    "@types/uuid": "^10.0.0",
+    "better-sqlite3": "^11.9.1",
+    "electron-log": "^5.3.3",
+    "electron-store": "^10.0.1",
+    "electron-updater": "^6.3.9",
+    "nodejs-whisper": "^0.2.6",
+    "openai": "^4.93.0",
+    "remixicon": "^4.6.0",
+    "tailwindcss": "^4.1.3",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/eslint-config-prettier": "^3.0.0",
+    "@electron-toolkit/eslint-config-ts": "^3.0.0",
+    "@electron-toolkit/tsconfig": "^1.0.1",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/mustache": "^4.2.5",
+    "@types/node": "^22.13.13",
+    "daisyui": "^5.0.19",
+    "electron": "^35.0.3",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "eslint": "^9.23.0",
+    "eslint-plugin-svelte": "^2.46.1",
+    "mustache": "^4.2.0",
+    "prettier": "^3.5.3",
+    "prettier-plugin-svelte": "^3.3.3",
+    "svelte": "^5.25.3",
+    "svelte-check": "^4.1.5",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.3"
+  }
+}
+
+================
+File: README.md
+================
+# Vox
+
+An Electron application with Svelte and TypeScript
+
+## Recommended IDE Setup
+
+- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode)
+
+## Project Setup
+
+### Install
+
+```bash
+$ npm install
+```
+
+### Development
+
+```bash
+$ npm run dev
+```
+
+### Build
+
+```bash
+# For windows
+$ npm run build:win
+
+# For macOS
+$ npm run build:mac
+
+# For Linux
+$ npm run build:linux
+```
+
+================
+File: svelte.config.mjs
+================
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+
+export default {
+  // Consult https://svelte.dev/docs#compile-time-svelte-preprocess
+  // for more information about preprocessors
+  preprocess: vitePreprocess()
+}
+
+================
+File: tsconfig.json
+================
+{
+  "files": [],
+  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.web.json" }]
+}
+
+================
+File: tsconfig.node.json
+================
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": ["electron.vite.config.*", "src/main/**/*", "src/preload/**/*"],
+  "compilerOptions": {
+    "composite": true,
+    "types": ["electron-vite/node"],
+    "moduleResolution": "bundler"
+  }
+}
+
+================
+File: tsconfig.web.json
+================
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
+  "include": [
+    "src/renderer/src/env.d.ts",
+    "src/renderer/src/**/*",
+    "src/renderer/src/**/*.svelte",
+    "src/preload/*.d.ts"
+  ],
+  "compilerOptions": {
+    "verbatimModuleSyntax": true,
+    "useDefineForClassFields": true,
+    "strict": false,
+    "allowJs": true,
+    "checkJs": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler"
+  }
+}
 
 
 

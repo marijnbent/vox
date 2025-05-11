@@ -3,13 +3,19 @@ productName: Vox
 directories:
   buildResources: build
 files:
+  - "out/**/*"
+  - "resources/**/*"
+  - "package.json"
   - '!**/.vscode/**'
-  - '!**/node_modules/**'
-  - '!src/*'
+  - '!src/**'
+  - '!build/**'
+  # node_modules will be handled by electron-builder to include only production dependencies
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!.git/**'
+  - '!*.log'
 asarUnpack:
   - resources/**
 extraResources:
