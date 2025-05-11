@@ -137,6 +137,36 @@ export function setupIpcHandlers(): void {
         }
     });
 
+    ipcMain.handle('playSystemSound', async (_, soundName: string) => {
+        if (process.platform !== 'darwin') {
+            logger.warn(`IPC: playSystemSound called on non-macOS platform for sound: ${soundName}. Ignoring.`);
+            return;
+        }
+        if (!soundName || typeof soundName !== 'string' || !/^[a-zA-Z0-9]+$/.test(soundName)) {
+            logger.error(`IPC: Invalid soundName received for playSystemSound: ${soundName}`);
+            throw new Error('Invalid sound name provided.');
+        }
+
+        const soundPath = `/System/Library/Sounds/${soundName}.aiff`;
+        logger.info(`IPC: Attempting to play system sound: ${soundPath}`);
+
+        try {
+            // Check if the sound file exists before attempting to play
+            await fs.access(soundPath);
+            exec(`afplay "${soundPath}"`, (error) => {
+                if (error) {
+                    logger.error(`IPC: Error playing system sound "${soundName}" using afplay:`, error);
+                    // We don't throw here as it's not critical if the sound doesn't play
+                } else {
+                    logger.debug(`IPC: Successfully played system sound: ${soundName}`);
+                }
+            });
+        } catch (accessError) {
+            logger.error(`IPC: System sound file not found or not accessible: ${soundPath}`, accessError);
+            // Not throwing, as it's a non-critical feature.
+        }
+    });
+
     logger.info('IPC Handlers setup complete.');
 }
 

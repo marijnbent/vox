@@ -10,7 +10,11 @@ let audioChunks: Blob[] = [];
 let audioStream: MediaStream | null = null;
 let audioContext: AudioContext | null = null;
 
-const SILENCE_THRESHOLD = 0.01;
+const SOUND_START = 'Tink';
+const SOUND_STOP = 'Submarine';
+const SOUND_CANCEL = 'Basso';
+
+const SILENCE_THRESHOLD = 0.003;
 const DESIRED_AUDIO_BITRATE = 32000;
 
 export function initializeAudioRecorder(): () => void {
@@ -24,7 +28,8 @@ export function initializeAudioRecorder(): () => void {
     stopRecording();
   });
   const cleanupCancel = window.api.onCancelRecording(() => {
-      window.api.log('info', 'Cancel recording requested (IPC). Setting flag and forcing cleanup.');
+      window.api.log('info', 'Cancel recording requested (IPC). Setting flag, playing sound, and forcing cleanup.');
+      window.api.playSystemSound(SOUND_CANCEL).catch(err => window.api.log('warn', `Failed to play cancel sound (IPC): ${err}`));
       cancelRequested = true;
       const recorderToStop = mediaRecorder;
       const streamToStop = audioStream;
@@ -119,9 +124,13 @@ async function startRecording(): Promise<void> {
 
       if (cancelRequested) {
           window.api.log('info', 'Recording cancelled (detected in onstop), discarding audio data.');
+          // Cancel sound is primarily played on IPC trigger. Not playing here to avoid duplicates.
           cleanupAfterRecording(true);
           return;
       }
+
+      // If not cancelled, it's a normal stop. Play stop sound.
+      window.api.playSystemSound(SOUND_STOP).catch(err => window.api.log('warn', `Failed to play stop sound: ${err}`));
 
       if (audioChunks.length === 0) {
           window.api.log('warn', 'No audio data recorded (or cleared due to cancel).');
@@ -205,6 +214,7 @@ async function startRecording(): Promise<void> {
 
     try {
         localRecorder.start();
+        window.api.playSystemSound(SOUND_START).catch(err => window.api.log('warn', `Failed to play start sound: ${err}`));
         window.api.log('info', `MediaRecorder started (Bitrate: ${localRecorder.audioBitsPerSecond || 'default'}, MimeType: ${localRecorder.mimeType}).`);
         window.api.notifyRecorderStarted();
     } catch (startError) {

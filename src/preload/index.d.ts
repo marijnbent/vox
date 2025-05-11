@@ -48,6 +48,7 @@ declare global {
       getDefaultPromptContent: () => Promise<string>;
       getLogFilePath: () => Promise<string>;
       getLogLines: (lineCount?: number) => Promise<string[]>;
+      playSystemSound: (soundName: string) => Promise<void>;
     }
   }
 }

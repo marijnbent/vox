@@ -82,6 +82,7 @@ const api = {
   getLogFilePath: (): Promise<string> => ipcRenderer.invoke('getLogFilePath'),
   getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
+  playSystemSound: (soundName: string): Promise<void> => ipcRenderer.invoke('playSystemSound', soundName),
 };
 
 if (process.contextIsolated) {
