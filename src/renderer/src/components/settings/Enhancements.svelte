@@ -333,7 +333,7 @@
 
           <div class="divider py-4">Context Variables</div>
           <p class="text-sm opacity-70 -mt-4 mb-4">
-            Enable context sources to include them in your prompts using placeholders like <code class="kbd kbd-xs">{'{{context_screen}}'}</code> or <code class="kbd kbd-xs">{'{{context_input_field}}'}</code>. (Note: Screen context capture is not yet fully implemented).
+            Enable context sources to include them in your prompts using placeholders like <code class="kbd kbd-xs">{'{{context_screen}}'}</code> or <code class="kbd kbd-xs">{'{{context_input_field}}'}</code>.
           </p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
               <div class="form-control">
@@ -420,7 +420,7 @@
                     <div class="form-control">
                       <label class="label py-1" for="new-prompt-template"><span class="label-text">Prompt Template:</span></label>
                       <textarea id="new-prompt-template" class="textarea textarea-bordered w-full" rows="4" placeholder="Enter your prompt. Use {'{{transcription}}'} where the text should be inserted." bind:value={newPromptTemplate}></textarea>
-                      <span class="pt-2 block-inline text-sm">Use <a target="_blank" class="underline" href="https://mustache.github.io/mustache.5.html">mustache templating</a>. Variables: <code class="kbd kbd-xs h-auto">{'{{transcription}}, {{dictionary_words}}, {{context_screen}}, {{context_clipboard}}, {{context_input_field}}'}</code></span>
+                      <span class="pt-2 block-inline text-sm">Use <a target="_blank" class="underline" href="https://mustache.github.io/mustache.5.html">mustache templating</a>. Variables: <code class="kbd kbd-xs h-auto">{'{{transcription}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{dictionary_words}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_screen}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_clipboard}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_input_field}}'}</code>.</span>
                    </div>
                    <div class="flex justify-end gap-2 pt-2">
                       <button class="btn btn-sm btn-ghost" on:click={() => { showAddPrompt = false; newPromptName=''; newPromptTemplate=''; }}>Cancel</button>
@@ -471,6 +471,7 @@
           <div class="form-control">
             <label class="label py-1" for="edit-prompt-template"><span class="label-text">Prompt Template:</span></label>
             <textarea id="edit-prompt-template" class="textarea textarea-bordered w-full" rows="6" placeholder="Use {'{{transcription}}'} where the text should be inserted." bind:value={editPromptTemplate}></textarea>
+            <span class="pt-2 block-inline text-sm">Variables: <code class="kbd kbd-xs h-auto">{'{{transcription}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{dictionary_words}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_screen}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_clipboard}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_input_field}}'}</code> (may include <code class="kbd kbd-xs"><cursor></code> marker).</span>
          </div>
       </div>
     {/if}

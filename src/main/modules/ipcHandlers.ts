@@ -10,6 +10,7 @@ import { EnhancementManager, getDefaultPromptTemplate } from '../enhancement/Enh
 import * as historyService from '../historyService';
 import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
+import { getFocusedInputTextWithCursor, type FocusedInputContext } from './macOSIntegration';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 
@@ -199,17 +200,30 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
                  if (enhancementSettings.useContextInputField) {
                   logger.info('IPC: useContextInputField is true, attempting to get focused input field text...');
                   try {
-                      const focusedText = await handleGetFocusedInputFieldText();
-                      if (focusedText) {
-                          contextData.context_input_field = focusedText;
-                          logger.info('IPC: Successfully added focused input field text to context.');
+                      const inputFieldContext = await handleGetFocusedInputFieldText();
+                      if (inputFieldContext && inputFieldContext.text) {
+                          let finalText = inputFieldContext.text;
+                          if (inputFieldContext.selectedRange && inputFieldContext.selectedRange.start !== -1) {
+                              const cursorPos = inputFieldContext.selectedRange.start;
+                              // Ensure cursor_pos is within bounds
+                              if (cursorPos >= 0 && cursorPos <= finalText.length) {
+                                  finalText = finalText.substring(0, cursorPos) + "<cursor>" + finalText.substring(cursorPos);
+                                  logger.info('IPC: Successfully added focused input field text to context with <cursor> marker.');
+                              } else {
+                                  logger.warn(`IPC: Cursor position ${cursorPos} out of bounds for text length ${finalText.length}. Not adding <cursor> marker.`);
+                                  logger.info('IPC: Successfully added focused input field text to context (no cursor marker due to bounds).');
+                              }
+                          } else {
+                              logger.info('IPC: Successfully added focused input field text to context (no cursor marker).');
+                          }
+                          contextData.context_input_field = finalText;
                       } else {
-                          contextData.context_input_field = ""; // Set to empty string if null or not found
+                          contextData.context_input_field = "";
                           logger.info('IPC: No focused input field text found or feature unavailable, context_input_field set to empty.');
                       }
                   } catch (inputError) {
                       logger.error('IPC: Error getting focused input field text:', inputError);
-                      contextData.context_input_field = ""; // Set to empty string on error
+                      contextData.context_input_field = "";
                   }
                  }
                  if (enhancementSettings.useContextClipboard) {
@@ -385,60 +399,8 @@ export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus
     mainProcessRecordingStatus = status;
 }
 
-async function handleGetFocusedInputFieldText(): Promise<string | null> {
-    if (process.platform !== 'darwin') {
-        logger.warn('IPC: getFocusedInputFieldText is only available on macOS.');
-        return null;
-    }
-    // First, check accessibility status.
-    const hasAccessibility = systemPreferences.isTrustedAccessibilityClient(false);
-    if (!hasAccessibility) {
-        logger.warn('IPC: Cannot get focused input field text, Accessibility permission not granted.');
-        // Optionally, notify the user through the renderer process if this happens frequently
-        // sendToMain('accessibility-required-for-input-context');
-        return null;
-    }
-
-    const appleScript = `
-tell application "System Events"
-    try
-        set focusedApp to name of first application process whose frontmost is true
-        tell process focusedApp
-            set focusedElement to value of attribute "AXFocusedUIElement"
-            if (role of focusedElement is "AXTextField" or role of focusedElement is "AXTextArea" or role of focusedElement is "AXComboBox" or role of focusedElement is "AXSearchField") then
-                return value of focusedElement
-            else if (role of focusedElement is "AXWebArea" or role of focusedElement is "AXGroup") then
-                -- Attempt to find a focused text element within a web area or group
-                try
-                    set webFocusedElement to value of attribute "AXFocusedUIElement" of focusedElement
-                     if (role of webFocusedElement is "AXTextField" or role of webFocusedElement is "AXTextArea") then
-                        return value of webFocusedElement
-                    end if
-                end try
-            end if
-        end tell
-    end try
-    return null
-end tell
-    `;
-
-    return new Promise((resolve) => {
-        exec(`osascript -e '${appleScript}'`, (error, stdout, stderr) => {
-            if (error) {
-                logger.error('IPC: Error executing AppleScript for focused input field:', error.message);
-                logger.error('IPC: AppleScript stderr:', stderr);
-                resolve(null);
-                return;
-            }
-            const result = stdout.trim();
-            if (result && result !== "null") {
-                logger.info(`IPC: Focused input field text retrieved: "${result.substring(0, 50)}..."`);
-                resolve(result);
-            } else {
-                logger.info('IPC: No focused input field text found or element not a text field.');
-                resolve(null);
-            }
-        });
-    });
+async function handleGetFocusedInputFieldText(): Promise<FocusedInputContext | null> {
+    logger.debug('IPC: Received request for getFocusedInputFieldText, calling macOSIntegration module.');
+    return getFocusedInputTextWithCursor();
 }
 

@@ -10,7 +10,7 @@ let audioChunks: Blob[] = [];
 let audioStream: MediaStream | null = null;
 let audioContext: AudioContext | null = null;
 
-const SILENCE_THRESHOLD = 0.05;
+const SILENCE_THRESHOLD = 0.01;
 const DESIRED_AUDIO_BITRATE = 32000;
 
 export function initializeAudioRecorder(): () => void {
