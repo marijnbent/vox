@@ -1,7 +1,6 @@
 import { app, BrowserWindow, screen, shell } from 'electron';
 import { join } from 'path';
 import { is } from '@electron-toolkit/utils';
-import icon from '../../../resources/icon.png?asset';
 import { logger } from '../logger';
 
 let mainWindow: BrowserWindow | null = null;
@@ -21,7 +20,6 @@ export function createMainWindow(): BrowserWindow {
         height: 670,
         show: false,
         autoHideMenuBar: true,
-        ...(process.platform === 'linux' ? { icon } : {}),
         webPreferences: {
             preload: join(app.getAppPath(), './out/preload/index.js'),
             sandbox: false,

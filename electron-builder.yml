@@ -12,6 +12,9 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: resources/icon-tray.png
+    to: icon-tray.png
 win:
   executableName: vox
 nsis:
