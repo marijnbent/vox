@@ -3,8 +3,8 @@ productName: Vox
 directories:
   buildResources: build
 files:
-  - '!**/.vscode/*'
-  - '!**/node_modules/*'
+  - '!**/.vscode/**'
+  - '!**/node_modules/**'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
