@@ -5,7 +5,8 @@ body, html {
 }
 
 input,
-textarea {
+textarea,
+.whitespace-pre-wrap.break-words {
   user-select: text;
 }
 @import "tailwindcss";

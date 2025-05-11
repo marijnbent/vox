@@ -237,7 +237,7 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
                               const cursorPos = inputFieldContext.selectedRange.start;
                               // Ensure cursor_pos is within bounds
                               if (cursorPos >= 0 && cursorPos <= finalText.length) {
-                                  finalText = finalText.substring(0, cursorPos) + "<cursor>" + finalText.substring(cursorPos);
+                                  finalText = finalText.substring(0, cursorPos) + "[[cursor]]" + finalText.substring(cursorPos);
                                   logger.info('IPC: Successfully added focused input field text to context with <cursor> marker.');
                               } else {
                                   logger.warn(`IPC: Cursor position ${cursorPos} out of bounds for text length ${finalText.length}. Not adding <cursor> marker.`);

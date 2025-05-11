@@ -55,7 +55,7 @@ export class OpenaiEnhancementService implements EnhancementService {
           { role: 'user', content: finalPrompt }
         ],
         model: model,
-        temperature: 0.5,
+        temperature: 0,
         max_tokens: Math.max(100, text.length * 2),
       });
 

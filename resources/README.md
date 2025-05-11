@@ -1,7 +1,8 @@
 # Key Monitor
 
-To compile:
+To compile the swift files:
 
 ```bash
-swiftc key-monitor.swift -o key-monitor -framework CoreGraphics -framework AppKit
+swiftc resources/key-monitor.swift -o resources/key-monitor -framework CoreGraphics -framework AppKit
+swiftc resources/focused_input_helper.swift -o resources/focused_input_helper -framework AppKit -framework Accessibility
 ```

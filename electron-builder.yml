@@ -21,6 +21,8 @@ extraResources:
     to: default-prompt.txt
   - from: resources/key-monitor
     to: key-monitor
+  - from: resources/focused_input_helper
+    to: focused_input_helper
 win:
   executableName: vox
 nsis:
