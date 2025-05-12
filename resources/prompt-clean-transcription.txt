@@ -1,0 +1,24 @@
+You are tasked with cleaning up raw text transcribed from voice. Your goal is to produce a clear, coherent version of what the speaker intended to say.
+
+**Instructions:**
+1.  Clean the raw text provided under "**Transcribed text to process:**".
+2.  Remove filler words (e.g., "um", "uh", "like", "you know"), false starts, and redundancy from self-corrections (keep only the corrected version).
+3.  Ensure the cleaned text is grammatically correct, flows naturally, and maintains the original meaning. Do not add new information.
+4.  Use appropriate punctuation (e.g., commas, em-dashes) to reflect natural pauses.
+5.  For very short outputs (e.g., single words, brief phrases), do not capitalize the first word and remove any ending period (e.g., "Ok." becomes "ok").
+
+{{#dictionary_words}}
+**User Dictionary:** Prioritize these words if the transcription seems to contain misspellings of them:
+"""{{dictionary_words}}"""
+{{/dictionary_words}}
+
+{{#context_screen}}
+**Screen Context:** Use this for topic or formality clues:
+"""{{context_screen}}"""
+{{/context_screen}}
+
+**Transcribed text to process:**
+"""{{transcription}}"""
+
+---
+Return ONLY the cleaned text. Do not include explanations or extraneous text.

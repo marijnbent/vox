@@ -49,6 +49,7 @@ Directory Structure
   mcp.json
 resources/
   default-prompt.txt
+  focused_input_helper.swift
   key-monitor.swift
   README.md
 src/
@@ -59,6 +60,7 @@ src/
       OpenaiEnhancementService.ts
     modules/
       ipcHandlers.ts
+      macOSIntegration.ts
       shortcutManager.ts
       windowManager.ts
     transcription/
@@ -153,49 +155,263 @@ File: .roo/mcp.json
 ================
 File: resources/default-prompt.txt
 ================
-You are tasked with cleaning up text that has been transcribed from voice. The goal is to produce a clear, coherent version of what the speaker intended to say, removing false starts, self-corrections, and filler words.
+You are tasked with cleaning up text transcribed from voice.
+Your primary goal is to perform **Phase 1: Transcription Cleanup** to produce a clear, coherent version of what the speaker intended to say.
+{{#context_input_field}}
+If, as in this case, information about a focused text field is provided (see "**Current Input Field State:**" below), you will then also perform **Phase 2: Contextual Adaptation**. This means crafting the precise text fragment that should be inserted at the `[[cursor]]` location, ensuring it fits grammatically and stylistically.
+{{/context_input_field}}
 
-Follow these steps to clean up the text:
+**Phase 1: Transcription Cleanup**
+First, clean the raw text provided under "**Transcribed text to process:**" according to these rules:
+1.  Remove filler words and phrases (e.g., "um", "uh", "like", "you know", "I mean").
+2.  Identify and remove false starts.
+3.  Retain only the corrected version when self-corrections occur (e.g., "The user need to, I mean, the user can do" becomes "The user can do").
+4.  Maintain the original meaning and intent. Do not add new information or change the substance.
+5.  Ensure the cleaned text is grammatically correct and flows naturally.
+6.  Preserve important pauses or breaks in thought with appropriate punctuation (e.g., commas, em-dashes).
+7.  For very short cleaned texts (e.g., single words or brief phrases), generally do not capitalize the first word and remove any ending period (e.g., "Ok." becomes "ok"). {{#context_input_field}}However, when preparing a fragment for an input field as per Phase 2, this rule is superseded by the specific capitalization and punctuation requirements of Phase 2 for that fragment.{{/context_input_field}}
 
-1. Remove filler words and phrases such as "um", "uh", "like", "you know", "I mean", etc.
-2. Identify and remove false starts. These are instances where the speaker begins a sentence or phrase but then restarts or changes direction.
-3. When the speaker corrects themselves, keep only the corrected version. For example, if the text says "The user need to, I mean, the user can do", retain only "The user can do".
-4. Maintain the original meaning and intent of the speaker. Do not add new information or change the substance of what was said.
-5. Ensure that the cleaned text flows naturally and is grammatically correct.
-6. Preserve any important pauses or breaks in thought by using appropriate punctuation.
-7. For very short texts (e.g., single words or brief phrases), remove the ending period if present and do not capitalize the first word.
+**Examples of Transcription Cleanup (Phase 1):**
+*   Original: "So, um, the thing is, you know, we need to, uh, I mean, we should probably look into this further."
+    Cleaned (standalone): "We should probably look into this further."
+*   Original: "The project will take about two weeks, no, sorry, three weeks to complete."
+    Cleaned (standalone): "The project will take about three weeks to complete."
+*   Original: "We're going to discuss the new, uh, the upcoming changes to the policy."
+    Cleaned (standalone): "We're going to discuss the upcoming changes to the policy."
+*   Original: "Ok."
+    Cleaned (standalone, applying rule 7 if no input field context): "ok"
 
-Here are some examples to illustrate the process:
-Original: "So, um, the thing is, you know, we need to, uh, I mean, we should probably look into this further."
-Cleaned: "We should probably look into this further."
+{{#context_input_field}}
+**Phase 2: Contextual Adaptation - Crafting the Insertion Fragment**
+Since "**Current Input Field State:**" is provided below, take the cleaned text from Phase 1 and prepare the exact text fragment that should be inserted at the `[[cursor]]` location. This fragment must be adapted according to these rules:
 
-Original: "The project will take about two weeks, no, sorry, three weeks to complete."
-Cleaned: "The project will take about three weeks to complete."
+8.  **Goal**: The output fragment is what will replace `[[cursor]]`. It should integrate seamlessly.
+9.  **Spacing of the Fragment**:
+    *   The fragment you return should *begin* with a single space if the character immediately preceding `[[cursor]]` (in the "**Current Input Field State:**" text) is a letter or number, AND the fragment itself doesn't naturally start with punctuation that attaches to the previous word.
+    *   The fragment you return should *end* with a single space if the character immediately following `[[cursor]]` (in the "**Current Input Field State:**" text) is a letter or number, AND the fragment itself doesn't naturally end with punctuation that attaches to it.
+    *   Avoid creating double spaces when the fragment is inserted. If the context (characters immediately before or after `[[cursor]]`) already provides a necessary space, the fragment should not add another one in that position.
+10. **Capitalization of the Fragment**:
+    *   The first word of the fragment should be capitalized if `[[cursor]]` is at the very beginning of the "**Current Input Field State:**" text, or if `[[cursor]]` is preceded by sentence-ending punctuation (e.g., ". ", "? ", "! ") followed by a space.
+    *   Otherwise, the first word of the fragment should generally be lowercase, unless it's a proper noun or "I".
+11. **Punctuation of the Fragment**:
+    *   If inserting the fragment at `[[cursor]]` would complete a sentence (e.g., `[[cursor]]` is at the end of the "**Current Input Field State:**" or followed only by spaces that would be consumed), the fragment should end with appropriate sentence-ending punctuation (e.g., a period).
+    *   If the `[[cursor]]` is followed by other text that continues the sentence, the fragment should *not* usually end with sentence-ending punctuation but *should* include other necessary punctuation (like a comma) if grammatically appropriate for the fragment's role within the larger sentence.
+    *   Rule 7's guidance for standalone short text is overridden by these Phase 2 rules for the fragment.
 
-Original: "We're going to discuss the new, uh, the upcoming changes to the policy."
-Cleaned: "We're going to discuss the upcoming changes to the policy."
+**Examples of Contextual Adaptation (Phase 2 - showing ONLY the fragment to be inserted):**
+(These examples apply because "**Current Input Field State:**" is provided. Pay close attention to spaces and punctuation in the "Adapted Fragment Output".)
 
-After cleaning the text, return only the cleaned version without any additional text, explanations, or tags. The output should be ready for direct use without further editing.
+*   Input field content: `The implementation[[cursor]] goes smoothly.`
+    Transcription: `Of the new bike program.`
+    Cleaned (Phase 1): `Of the new bike program.`
+    Adapted Fragment Output: ` of the new bike program`
+    (Explanation: Fragment starts with a space because "implementation" (letter) precedes `[[cursor]]`. 'o' is lowercase. No trailing space in fragment as " goes" in context provides it.)
 
-Here is the transcribed text:
-{{transcription}}
+*   Input field content: `The cat is[[cursor]]very quiet.`
+    Transcription: `Sleeping.`
+    Cleaned (Phase 1): `sleeping`
+    Adapted Fragment Output: ` sleeping `
+    (Explanation: Add spaces and remove capitalisation)
 
+*   Input field content: `[[cursor]] was a great success.`
+    Transcription: `Uh, the event, I mean, the conference.`
+    Cleaned (Phase 1): `The conference.`
+    Adapted Fragment Output: `The conference`
+    (Explanation: 'T' capitalized as `[[cursor]]` is at the start of the sentence. No leading space in fragment. No trailing space in fragment as " was" in context provides it. No period.)
+
+*   Input field content: `We invited [[cursor]]Sarah.`
+    Transcription: `My friends, Mary and.`
+    Cleaned (Phase 1): `My friends, Mary and`
+    Adapted Fragment Output: `my friends, Mary and `
+    (Explanation: 'M' uncapitalized. No leading space in fragment because context " [[cursor]]" already provides separation. Trailing space added.)
+
+{{/context_input_field}}
+
+---
 {{#dictionary_words}}
-Words that the user added to its dictionary. Replace if you think the word was transcribed differently.
-{{dictionary_words}}
+**User Dictionary:** The following words are from a user-added dictionary. If a word in the transcription seems like a misspelling of one of these, prioritize the dictionary version.
+"""{{dictionary_words}}"""
 {{/dictionary_words}}
 
 {{#context_input_field}}
-{{context_input_field}}
+**Current Input Field State:** The following is the content of the text field where the cleaned text will be inserted. `[[cursor]]` marks the exact insertion point.
+"""{{context_input_field}}"""
+**(Apply Phase 2 rules to craft the insertion fragment using this context.)**
 {{/context_input_field}}
 
-{{#context_clipboard}}
-{{context_clipboard}}
-{{/context_clipboard}}
-
 {{#context_screen}}
-{{context_screen}}
+**Screen Context:** The following is text from the current screen, which might provide clues about the topic or required formality:
+"""{{context_screen}}"""
 {{/context_screen}}
+
+**Transcribed text to process:**
+"""{{transcription}}"""
+
+---
+Return ONLY the processed text.
+{{#context_input_field}}
+*   This means **only the adapted text fragment** that should be inserted at `[[cursor]]` (as defined by Phase 2 rules). Do NOT return the full content of the input field.
+{{/context_input_field}}
+{{^context_input_field}}
+*   This means only the cleaned text from Phase 1 (with rule 7 applied as appropriate for standalone text).
+{{/context_input_field}}
+Do not include any explanations, tags, or extraneous text in your response.
+
+================
+File: resources/focused_input_helper.swift
+================
+import AppKit
+import Accessibility
+
+// Define the output data structure
+struct FocusedElementOutput: Codable {
+    var text: String?
+    var selectionStart: Int?
+    var selectionLength: Int?
+    var error: String?
+    var debugRole: String? // Optional for debugging
+}
+
+func getFocusedElementInfo() -> FocusedElementOutput {
+    // Get the frontmost application
+    guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
+        return FocusedElementOutput(error: "Error:NoFrontmostApplication")
+    }
+    let pid = frontmostApp.processIdentifier
+    let appElement = AXUIElementCreateApplication(pid)
+
+    // Get the initially focused UI element
+    var focusedElementRef: CFTypeRef?
+    var result = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedElementRef)
+    var focusedElement = focusedElementRef as! AXUIElement?
+
+    if result != AXError.success || focusedElement == nil {
+        // Attempt to get focused window if no focused UI element at app level
+        var focusedWindowRef: CFTypeRef?
+        result = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
+        if result == AXError.success, let windowElement = focusedWindowRef as! AXUIElement? {
+            // Now try to get the focused UI element from the window
+            focusedElementRef = nil // Reset for the next call
+            result = AXUIElementCopyAttributeValue(windowElement, kAXFocusedUIElementAttribute as CFString, &focusedElementRef)
+            focusedElement = focusedElementRef as! AXUIElement?
+            if result != AXError.success || focusedElement == nil {
+                 return FocusedElementOutput(error: "Error:NoFocusedUIElementInAppOrWindow")
+            }
+        } else {
+            return FocusedElementOutput(error: "Error:NoFocusedUIElementOrWindow")
+        }
+    }
+    
+    guard var currentFocusedElement = focusedElement else {
+        return FocusedElementOutput(error: "Error:CouldNotCastInitialFocusedElement")
+    }
+
+    // Iterative Drill-Down to find the deepest focused element
+    // Max 8 iterations to prevent potential infinite loops in rare cases
+    for _ in 0..<8 {
+        var deeperFocusedElementRef: AnyObject?
+        let drillResult = AXUIElementCopyAttributeValue(currentFocusedElement, kAXFocusedUIElementAttribute as CFString, &deeperFocusedElementRef)
+
+        if drillResult == .success, let deeperFocusedElement = deeperFocusedElementRef as! AXUIElement?, deeperFocusedElement != currentFocusedElement {
+            currentFocusedElement = deeperFocusedElement
+        } else {
+            // No deeper element, or it's the same, or an error occurred
+            break
+        }
+    }
+    
+    let finalFocusedElement = currentFocusedElement
+
+    // Extract Data from Final Focused Element
+    var textValue: String?
+    var selectionStart: Int?
+    var selectionLength: Int?
+    var debugRole: String?
+
+    // Get Role for debugging
+    var roleRef: AnyObject?
+    if AXUIElementCopyAttributeValue(finalFocusedElement, kAXRoleAttribute as CFString, &roleRef) == .success {
+        if let role = roleRef as? String {
+            debugRole = role
+        }
+    }
+
+    // Text Value
+    var valueRef: AnyObject?
+    if AXUIElementCopyAttributeValue(finalFocusedElement, kAXValueAttribute as CFString, &valueRef) == .success {
+        if let strValue = valueRef as? String {
+            textValue = strValue
+        } else if let numValue = valueRef as? NSNumber {
+            textValue = numValue.stringValue
+        }
+        // Add more type checks if necessary, e.g., for attributed strings
+    }
+
+    // Selection Range
+    var selectedTextRangeRef: AnyObject?
+    if AXUIElementCopyAttributeValue(finalFocusedElement, kAXSelectedTextRangeAttribute as CFString, &selectedTextRangeRef) == .success {
+        if let axValue = selectedTextRangeRef as! AXValue? {
+            var range = CFRange()
+            if AXValueGetValue(axValue, AXValueType.cfRange, &range) {
+                if range.location != kCFNotFound && range.length != kCFNotFound {
+                    selectionStart = range.location
+                    selectionLength = range.length
+                } else if range.location != kCFNotFound {
+                    selectionStart = range.location
+                    selectionLength = 0 // Default to 0 if length is not found but location is
+                }
+            }
+        }
+    }
+    
+    if textValue == nil && selectionStart != nil {
+        textValue = ""
+    }
+
+    // Construct Output
+    if textValue != nil || (selectionStart != nil && selectionLength != nil) {
+        return FocusedElementOutput(text: textValue, selectionStart: selectionStart, selectionLength: selectionLength, error: nil, debugRole: debugRole)
+    } else {
+        // If we have a debug role, include it in the NoDataFound error for better diagnostics
+        let errorMsg = debugRole != nil ? "NoDataFound (Role: \(debugRole!))" : "NoDataFound"
+        return FocusedElementOutput(error: errorMsg, debugRole: debugRole)
+    }
+}
+
+// Main Execution Block
+let output = getFocusedElementInfo()
+let encoder = JSONEncoder()
+encoder.outputFormatting = .prettyPrinted // Optional: for human-readable output during debugging
+
+do {
+    let jsonData = try encoder.encode(output)
+    if let jsonString = String(data: jsonData, encoding: .utf8) {
+        print(jsonString)
+        fflush(stdout) // Ensure output is written immediately
+        exit(0)
+    } else {
+        let errorOutput = FocusedElementOutput(error: "Error:FailedToConvertToUTF8String")
+        let errorJsonData = try encoder.encode(errorOutput)
+        if let errorJsonString = String(data: errorJsonData, encoding: .utf8) {
+            print(errorJsonString)
+        }
+        fflush(stdout)
+        exit(1)
+    }
+} catch {
+    // Attempt to encode a simpler error if the main encoding fails
+    let errorOutput = FocusedElementOutput(error: "Error:JSONEncodingFailed - \(error.localizedDescription)")
+    // No easy way to guarantee this secondary encoding won't also fail, but it's a best effort.
+    // For robustness, could print a hardcoded JSON error string here.
+    if let jsonData = try? encoder.encode(errorOutput), let jsonString = String(data: jsonData, encoding: .utf8) {
+        print(jsonString)
+    } else {
+        // Fallback to a very basic error string if all JSON encoding fails
+        print("{\"error\":\"Critical: JSON encoding failed and could not produce error JSON.\"}")
+    }
+    fflush(stdout)
+    exit(1)
+}
 
 ================
 File: resources/key-monitor.swift
@@ -387,10 +603,11 @@ File: resources/README.md
 ================
 # Key Monitor
 
-To compile:
+To compile the swift files:
 
 ```bash
-swiftc key-monitor.swift -o key-monitor -framework CoreGraphics -framework AppKit
+swiftc resources/key-monitor.swift -o resources/key-monitor -framework CoreGraphics -framework AppKit
+swiftc resources/focused_input_helper.swift -o resources/focused_input_helper -framework AppKit -framework Accessibility
 ```
 
 ================
@@ -408,9 +625,9 @@ import type { EnhancementSettings, EnhancementPrompt } from '../store';
 export function getDefaultPromptTemplate(): string {
   try {
     const basePath = app.isPackaged
-        ? process.resourcesPath
-        : app.getAppPath();
-    const filePath = path.join(basePath, 'resources', 'default-prompt.txt');
+        ? path.join(process.resourcesPath)
+        : path.join(app.getAppPath(), 'resources');
+    const filePath = path.join(basePath, 'default-prompt.txt');
 
     if (fs.existsSync(filePath)) {
       logger.debug(`Loading default prompt from: ${filePath}`);
@@ -595,7 +812,7 @@ export class OpenaiEnhancementService implements EnhancementService {
           { role: 'user', content: finalPrompt }
         ],
         model: model,
-        temperature: 0.5,
+        temperature: 0.1,
         max_tokens: Math.max(100, text.length * 2),
       });
 
@@ -631,6 +848,7 @@ import { EnhancementManager, getDefaultPromptTemplate } from '../enhancement/Enh
 import * as historyService from '../historyService';
 import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
+import { getFocusedInputTextWithCursor, type FocusedInputContext } from './macOSIntegration';
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 
@@ -700,6 +918,7 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('getMediaPermissionStatus', handleGetMediaPermissionStatus);
     ipcMain.handle('requestMediaPermission', handleRequestMediaPermission);
     ipcMain.handle('openSettingsURL', handleOpenSettingsURL);
+    ipcMain.handle('getFocusedInputFieldText', handleGetFocusedInputFieldText);
 
     ipcMain.handle('getHistory', (_, page?: number, pageSize?: number) => {
         logger.info(`IPC: Received request for history page ${page || 1}`);
@@ -753,6 +972,36 @@ export function setupIpcHandlers(): void {
         } catch (error) {
             logger.error(`IPC: Error reading log file for getLogLines:`, error);
             throw error;
+        }
+    });
+
+    ipcMain.handle('playSystemSound', async (_, soundName: string) => {
+        if (process.platform !== 'darwin') {
+            logger.warn(`IPC: playSystemSound called on non-macOS platform for sound: ${soundName}. Ignoring.`);
+            return;
+        }
+        if (!soundName || typeof soundName !== 'string' || !/^[a-zA-Z0-9]+$/.test(soundName)) {
+            logger.error(`IPC: Invalid soundName received for playSystemSound: ${soundName}`);
+            throw new Error('Invalid sound name provided.');
+        }
+
+        const soundPath = `/System/Library/Sounds/${soundName}.aiff`;
+        logger.info(`IPC: Attempting to play system sound: ${soundPath}`);
+
+        try {
+            // Check if the sound file exists before attempting to play
+            await fs.access(soundPath);
+            exec(`afplay "${soundPath}"`, (error) => {
+                if (error) {
+                    logger.error(`IPC: Error playing system sound "${soundName}" using afplay:`, error);
+                    // We don't throw here as it's not critical if the sound doesn't play
+                } else {
+                    logger.debug(`IPC: Successfully played system sound: ${soundName}`);
+                }
+            });
+        } catch (accessError) {
+            logger.error(`IPC: System sound file not found or not accessible: ${soundPath}`, accessError);
+            // Not throwing, as it's a non-critical feature.
         }
     });
 
@@ -817,7 +1066,33 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
                    contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
                  }
                  if (enhancementSettings.useContextInputField) {
-                   contextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
+                  logger.info('IPC: useContextInputField is true, attempting to get focused input field text...');
+                  try {
+                      const inputFieldContext = await handleGetFocusedInputFieldText();
+                      if (inputFieldContext && inputFieldContext.text) {
+                          let finalText = inputFieldContext.text;
+                          if (inputFieldContext.selectedRange && inputFieldContext.selectedRange.start !== -1) {
+                              const cursorPos = inputFieldContext.selectedRange.start;
+                              // Ensure cursor_pos is within bounds
+                              if (cursorPos >= 0 && cursorPos <= finalText.length) {
+                                  finalText = finalText.substring(0, cursorPos) + "[[cursor]]" + finalText.substring(cursorPos);
+                                  logger.info('IPC: Successfully added focused input field text to context with <cursor> marker.');
+                              } else {
+                                  logger.warn(`IPC: Cursor position ${cursorPos} out of bounds for text length ${finalText.length}. Not adding <cursor> marker.`);
+                                  logger.info('IPC: Successfully added focused input field text to context (no cursor marker due to bounds).');
+                              }
+                          } else {
+                              logger.info('IPC: Successfully added focused input field text to context (no cursor marker).');
+                          }
+                          contextData.context_input_field = finalText;
+                      } else {
+                          contextData.context_input_field = "";
+                          logger.info('IPC: No focused input field text found or feature unavailable, context_input_field set to empty.');
+                      }
+                  } catch (inputError) {
+                      logger.error('IPC: Error getting focused input field text:', inputError);
+                      contextData.context_input_field = "";
+                  }
                  }
                  if (enhancementSettings.useContextClipboard) {
                    contextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
@@ -990,6 +1265,156 @@ function handleProcessingCancelledSilence() {
 let mainProcessRecordingStatus: 'idle' | 'recording' | 'processing' | 'error' = 'idle';
 export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus): void {
     mainProcessRecordingStatus = status;
+}
+
+async function handleGetFocusedInputFieldText(): Promise<FocusedInputContext | null> {
+    logger.debug('IPC: Received request for getFocusedInputFieldText, calling macOSIntegration module.');
+    return getFocusedInputTextWithCursor();
+}
+
+================
+File: src/main/modules/macOSIntegration.ts
+================
+import { systemPreferences, app } from 'electron';
+import { execFile } from 'child_process';
+import path from 'path';
+import { logger } from '../logger'; // Assuming logger is correctly set up
+
+export interface FocusedInputContext {
+    text: string;
+    selectedRange?: { start: number; length: number }; // start is 0-indexed
+}
+
+// Interface for the raw JSON output from the Swift helper
+interface SwiftFocusedElementOutput {
+    text?: string;
+    selectionStart?: number;
+    selectionLength?: number;
+    error?: string;
+    debugRole?: string;
+}
+
+/**
+ * Determines the path to the compiled focused_input_helper executable.
+ * @returns The path to the Swift helper executable.
+ */
+function getSwiftHelperPath(): string {
+    const basePath = app.isPackaged
+        ? path.join(process.resourcesPath)
+        : path.join(app.getAppPath(), 'resources');
+    return path.join(basePath, 'focused_input_helper');
+}
+
+/**
+ * Retrieves the text content and selection range from the focused input element
+ * on macOS using a native Swift helper.
+ *
+ * @returns A Promise that resolves to FocusedInputContext if successful, or null otherwise.
+ */
+export async function getFocusedInputTextWithCursor(): Promise<FocusedInputContext | null> {
+    if (process.platform !== 'darwin') {
+        logger.warn('[macOSIntegration] getFocusedInputTextWithCursor is only available on macOS.');
+        return null;
+    }
+
+    // Check for accessibility permissions without prompting
+    const hasAccessibility = systemPreferences.isTrustedAccessibilityClient(false);
+    if (!hasAccessibility) {
+        logger.warn(
+            '[macOSIntegration] Accessibility permissions are not granted. ' +
+            'Please enable this application in System Settings > Privacy & Security > Accessibility.'
+        );
+        return null;
+    }
+
+    const swiftHelperExecutablePath = getSwiftHelperPath();
+
+    return new Promise((resolve) => {
+        execFile(swiftHelperExecutablePath, (error, stdout, stderr) => {
+            if (error) {
+                logger.error('[macOSIntegration] Error executing Swift helper:', {
+                    message: error.message,
+                    code: (error as any).code,
+                    signal: (error as any).signal,
+                    path: swiftHelperExecutablePath,
+                    stdout: stdout.toString().trim(),
+                    stderr: stderr.toString().trim(),
+                });
+                resolve(null);
+                return;
+            }
+
+            const stderrOutput = stderr.toString().trim();
+            if (stderrOutput) {
+                // Log stderr as it might contain non-fatal accessibility warnings from Swift
+                logger.warn('[macOSIntegration] Swift helper stderr output:', stderrOutput);
+            }
+
+            const stdoutOutput = stdout.toString().trim();
+            if (!stdoutOutput) {
+                logger.warn('[macOSIntegration] Swift helper stdout is empty.');
+                resolve(null);
+                return;
+            }
+
+            let parsedOutput: SwiftFocusedElementOutput;
+            try {
+                parsedOutput = JSON.parse(stdoutOutput);
+            } catch (parseError: any) {
+                logger.error('[macOSIntegration] Error parsing JSON from Swift helper:', {
+                    errorMessage: parseError.message,
+                    stdout: stdoutOutput.substring(0, 200) // Log a snippet of the problematic stdout
+                });
+                resolve(null);
+                return;
+            }
+
+            if (parsedOutput.error) {
+                logger.info(`[macOSIntegration] Swift helper reported an error: ${parsedOutput.error}`, { debugRole: parsedOutput.debugRole });
+                resolve(null);
+                return;
+            }
+            
+            let text = parsedOutput.text;
+            // As per prompt: If result.text is undefined but selection is valid, default to an empty string.
+            // Note: The Swift script is designed to already do this, so `text` should ideally be a string.
+            if (text === undefined && 
+                typeof parsedOutput.selectionStart === 'number' && 
+                typeof parsedOutput.selectionLength === 'number') {
+                text = "";
+            }
+
+            // If text is still not a string, it's an unexpected state or no actual text data.
+            if (typeof text !== 'string') {
+                 logger.warn('[macOSIntegration] Parsed text from Swift helper is not a string or is undefined, despite no error field.', { parsedOutput });
+                 resolve(null); // Or handle as "no text found" if appropriate
+                 return;
+            }
+
+            const context: FocusedInputContext = { text };
+
+            if (typeof parsedOutput.selectionStart === 'number' &&
+                typeof parsedOutput.selectionLength === 'number' &&
+                parsedOutput.selectionStart >= 0 &&
+                parsedOutput.selectionLength >= 0) {
+                context.selectedRange = { start: parsedOutput.selectionStart, length: parsedOutput.selectionLength };
+            }
+            
+            const textSnippet = (context.text || "").substring(0, 30).replace(/\n/g, '\\n');
+            if (context.selectedRange) {
+                logger.info(
+                    `[macOSIntegration] Focused input (Swift): "${textSnippet}...", ` +
+                    `Selection: ${context.selectedRange.start},${context.selectedRange.length}`
+                );
+            } else {
+                 logger.info(
+                    `[macOSIntegration] Focused input (Swift): "${textSnippet}..." (no valid selection data)`
+                );
+            }
+
+            resolve(context);
+        });
+    });
 }
 
 ================
@@ -1180,7 +1605,7 @@ export function startKeyMonitor(keysToWatch: string[]): void {
     }
 
     const basePath = app.isPackaged
-        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources')
+        ? path.join(process.resourcesPath)
         : path.join(app.getAppPath(), 'resources');
     const executablePath = path.join(basePath, 'key-monitor');
 
@@ -2144,6 +2569,7 @@ import { ipcMain } from 'electron';
 import log from 'electron-log';
 
 log.transports.file.level = 'info';
+log.transports.file.sync = false;
 log.transports.console.level = 'debug';
 log.initialize();
 
@@ -2334,9 +2760,11 @@ declare global {
       clearAllHistory: () => Promise<boolean>,
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
+      getFocusedInputFieldText: () => Promise<{ text: string; selectedRange?: { start: number; length: number } } | null>;
       getDefaultPromptContent: () => Promise<string>;
       getLogFilePath: () => Promise<string>;
       getLogLines: (lineCount?: number) => Promise<string[]>;
+      playSystemSound: (soundName: string) => Promise<void>;
     }
   }
 }
@@ -2428,6 +2856,7 @@ const api = {
   getLogFilePath: (): Promise<string> => ipcRenderer.invoke('getLogFilePath'),
   getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
+  playSystemSound: (soundName: string): Promise<void> => ipcRenderer.invoke('playSystemSound', soundName),
 };
 
 if (process.contextIsolated) {
@@ -2508,7 +2937,8 @@ body, html {
 }
 
 input,
-textarea {
+textarea,
+.whitespace-pre-wrap.break-words {
   user-select: text;
 }
 @import "tailwindcss";
@@ -3299,7 +3729,7 @@ File: src/renderer/src/components/settings/Enhancements.svelte
 
           <div class="divider py-4">Context Variables</div>
           <p class="text-sm opacity-70 -mt-4 mb-4">
-            Enable context sources to include them in your prompts using placeholders like <code class="kbd kbd-xs">{'{{context_screen}}'}</code>. (Note: Context capture is not yet implemented).
+            Enable context sources to include them in your prompts using placeholders like <code class="kbd kbd-xs">{'{{context_screen}}'}</code> or <code class="kbd kbd-xs">{'{{context_input_field}}'}</code>.
           </p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
               <div class="form-control">
@@ -3386,7 +3816,7 @@ File: src/renderer/src/components/settings/Enhancements.svelte
                     <div class="form-control">
                       <label class="label py-1" for="new-prompt-template"><span class="label-text">Prompt Template:</span></label>
                       <textarea id="new-prompt-template" class="textarea textarea-bordered w-full" rows="4" placeholder="Enter your prompt. Use {'{{transcription}}'} where the text should be inserted." bind:value={newPromptTemplate}></textarea>
-                      <span class="pt-2 block-inline text-sm">Use <a target="_blank" class="underline" href="https://mustache.github.io/mustache.5.html">mustache templating</a>. Variables: <code class="kbd kbd-xs h-auto">{'{{transcription}}, {{dictionary_words}}, {{context_screen}}, {{context_clipboard}}, {{context_input_field}}'}</code></span>
+                      <span class="pt-2 block-inline text-sm">Use <a target="_blank" class="underline" href="https://mustache.github.io/mustache.5.html">mustache templating</a>. Variables: <code class="kbd kbd-xs h-auto">{'{{transcription}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{dictionary_words}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_screen}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_clipboard}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_input_field}}'}</code>.</span>
                    </div>
                    <div class="flex justify-end gap-2 pt-2">
                       <button class="btn btn-sm btn-ghost" on:click={() => { showAddPrompt = false; newPromptName=''; newPromptTemplate=''; }}>Cancel</button>
@@ -3437,6 +3867,7 @@ File: src/renderer/src/components/settings/Enhancements.svelte
           <div class="form-control">
             <label class="label py-1" for="edit-prompt-template"><span class="label-text">Prompt Template:</span></label>
             <textarea id="edit-prompt-template" class="textarea textarea-bordered w-full" rows="6" placeholder="Use {'{{transcription}}'} where the text should be inserted." bind:value={editPromptTemplate}></textarea>
+            <span class="pt-2 block-inline text-sm">Variables: <code class="kbd kbd-xs h-auto">{'{{transcription}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{dictionary_words}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_screen}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_clipboard}}'}</code>, <code class="kbd kbd-xs h-auto">{'{{context_input_field}}'}</code> (may include <code class="kbd kbd-xs"><cursor></code> marker).</span>
          </div>
       </div>
     {/if}
@@ -3968,14 +4399,19 @@ File: src/renderer/src/components/settings/Permissions.svelte
                  {getStatusText(accessibilityStatus)}
               </span>
             </div>
-             {#if accessibilityStatus === 'not-granted'}
+             {#if ['not-granted', 'not-determined', 'denied', 'restricted'].includes(accessibilityStatus)}
                 <div class="mt-2">
+                    {#if (accessibilityStatus === 'denied' || accessibilityStatus === 'restricted') && !showManualInstructions}
+                        <p class="text-xs opacity-80 mb-2">
+                            Accessibility access was previously {getStatusText(accessibilityStatus).toLowerCase()}. Clicking below will attempt to re-prompt and then show guidance for System Settings.
+                        </p>
+                    {/if}
                     <button class="btn btn-primary btn-sm" on:click={requestAccessibility}>
                       Request Access
                     </button>
                     {#if showManualInstructions}
                         <p class="text-xs text-warning mt-2">
-                            System Settings should open. Please find 'Vox Transcriber' (or 'key-monitor') in the Accessibility list, click '+', add it if missing, and ensure the toggle is ON. You may need to restart the app.
+                            The system prompt for Accessibility access may have appeared. If not, or if access is still not granted, please go to System Settings > Privacy & Security > Accessibility. Find 'Vox Transcriber' (or 'key-monitor') in the list, add it if missing, and ensure its toggle is ON. You might need to restart the app after changing this setting.
                         </p>
                     {/if}
                 </div>
@@ -4562,7 +4998,11 @@ let audioChunks: Blob[] = [];
 let audioStream: MediaStream | null = null;
 let audioContext: AudioContext | null = null;
 
-const SILENCE_THRESHOLD = 0.07;
+const SOUND_START = 'Tink';
+const SOUND_STOP = 'Submarine';
+const SOUND_CANCEL = 'Basso';
+
+const SILENCE_THRESHOLD = 0.003;
 const DESIRED_AUDIO_BITRATE = 32000;
 
 export function initializeAudioRecorder(): () => void {
@@ -4576,7 +5016,8 @@ export function initializeAudioRecorder(): () => void {
     stopRecording();
   });
   const cleanupCancel = window.api.onCancelRecording(() => {
-      window.api.log('info', 'Cancel recording requested (IPC). Setting flag and forcing cleanup.');
+      window.api.log('info', 'Cancel recording requested (IPC). Setting flag, playing sound, and forcing cleanup.');
+      window.api.playSystemSound(SOUND_CANCEL).catch(err => window.api.log('warn', `Failed to play cancel sound (IPC): ${err}`));
       cancelRequested = true;
       const recorderToStop = mediaRecorder;
       const streamToStop = audioStream;
@@ -4671,9 +5112,13 @@ async function startRecording(): Promise<void> {
 
       if (cancelRequested) {
           window.api.log('info', 'Recording cancelled (detected in onstop), discarding audio data.');
+          // Cancel sound is primarily played on IPC trigger. Not playing here to avoid duplicates.
           cleanupAfterRecording(true);
           return;
       }
+
+      // If not cancelled, it's a normal stop. Play stop sound.
+      window.api.playSystemSound(SOUND_STOP).catch(err => window.api.log('warn', `Failed to play stop sound: ${err}`));
 
       if (audioChunks.length === 0) {
           window.api.log('warn', 'No audio data recorded (or cleared due to cancel).');
@@ -4757,6 +5202,7 @@ async function startRecording(): Promise<void> {
 
     try {
         localRecorder.start();
+        window.api.playSystemSound(SOUND_START).catch(err => window.api.log('warn', `Failed to play start sound: ${err}`));
         window.api.log('info', `MediaRecorder started (Bitrate: ${localRecorder.audioBitsPerSecond || 'default'}, MimeType: ${localRecorder.mimeType}).`);
         window.api.notifyRecorderStarted();
     } catch (startError) {
@@ -5188,6 +5634,7 @@ out
 .DS_Store
 .eslintcache
 *.log*
+resources/repomix-output.txt
 
 ================
 File: .prettierignore
@@ -5228,18 +5675,26 @@ productName: Vox
 directories:
   buildResources: build
 files:
+  - "out/**/*"
+  - "package.json"
   - '!**/.vscode/**'
-  - '!**/node_modules/**'
-  - '!src/*'
+  - '!src/**'
+  - '!build/**'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-asarUnpack:
-  - resources/**
+  - '!.git/**'
+  - '!*.log'
 extraResources:
   - from: resources/icon-tray.png
     to: icon-tray.png
+  - from: resources/default-prompt.txt
+    to: default-prompt.txt
+  - from: resources/key-monitor
+    to: key-monitor
+  - from: resources/focused_input_helper
+    to: focused_input_helper
 win:
   executableName: vox
 nsis:

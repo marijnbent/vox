@@ -54,6 +54,7 @@
     "prettier-plugin-svelte": "^3.3.3",
     "svelte": "^5.25.3",
     "svelte-check": "^4.1.5",
+    "svelte-dnd-action": "^0.9.61",
     "typescript": "^5.8.2",
     "vite": "^6.2.3"
   }

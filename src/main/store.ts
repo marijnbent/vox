@@ -23,18 +23,21 @@ interface EnhancementSettings {
   customApiKey: string;
   customModelName: string;
   customBaseUrl?: string;
-  activePromptId: string;
+  // activePromptId: string; // Removed in favor of activePromptChain
   useTranscript: boolean;
   useContextScreen: boolean;
   useContextInputField: boolean;
   useContextClipboard: boolean;
   useDictionaryWordList: boolean;
+  // Removed global temperature: number;
+  activePromptChain: string[]; // Array of prompt IDs to run in sequence
 }
 
 interface EnhancementPrompt {
   id: string;
   name: string;
   template: string;
+  temperature: number; // Temperature specific to this prompt
 }
 
 interface ShortcutSettings {
@@ -90,14 +93,16 @@ const store = new Store<StoreSchema>({
       customApiKey: '',
       customModelName: '',
       customBaseUrl: '',
-      activePromptId: 'default',
+      // activePromptId: 'default', // Ensure this is removed
+      activePromptChain: ['default'], // Default chain with only the default prompt
       useTranscript: true,
       useContextScreen: false,
       useContextInputField: false,
       useContextClipboard: false,
       useDictionaryWordList: false
+      // Removed default temperature
     },
-    enhancementPrompts: [],
+    enhancementPrompts: [], // Existing prompts won't have temperature initially, need handling
     shortcuts: {
         pushToTalk: 'CommandOrControl+Shift+Space',
         toggleRecording: 'CommandOrControl+Shift+R'

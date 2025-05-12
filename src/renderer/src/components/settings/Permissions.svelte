@@ -208,8 +208,8 @@
             <span class="text-xl">🖥️</span>
           </div>
           <div class="flex-1">
-            <h4 class="font-semibold">Screen Recording (macOS)</h4>
-            <p class="text-sm opacity-70">Optional - For future contextual features.</p>
+            <h4 class="font-semibold">Screen Recording</h4>
+            <p class="text-sm opacity-70">Optional - For contextual enhancement features.</p>
              <div class="flex items-center gap-2 mt-1">
               <span class="badge {getBadgeClass(screenRecordingStatus)} gap-1">
                  {#if screenRecordingStatus !== 'checking' && screenRecordingStatus !== 'unavailable'}

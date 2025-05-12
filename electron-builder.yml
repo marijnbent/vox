@@ -17,8 +17,10 @@ files:
 extraResources:
   - from: resources/icon-tray.png
     to: icon-tray.png
-  - from: resources/default-prompt.txt
-    to: default-prompt.txt
+  - from: resources/prompt-clean-transcription.txt
+    to: prompt-clean-transcription.txt
+  - from: resources/prompt-contextual-formatting.txt
+    to: prompt-contextual-formatting.txt
   - from: resources/key-monitor
     to: key-monitor
   - from: resources/focused_input_helper

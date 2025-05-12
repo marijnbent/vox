@@ -1,0 +1,32 @@
+You are tasked with adapting a pre-cleaned text fragment for insertion into an existing text field at a specific cursor location (`[[cursor]]`). Your goal is to determine the exact fragment (including spacing, capitalization, and punctuation) that should replace `[[cursor]]` for seamless integration.
+
+**Inputs:**
+1.  **Cleaned Text Fragment:** The text to be potentially adapted and inserted.
+    """{{cleaned_text}}"""
+2.  **Current Input Field State:** The text field content, with `[[cursor]]` marking the insertion point.
+    """{{context_input_field}}"""
+
+{{#context_screen}}
+**Screen Context:** Use this for stylistic consistency clues:
+"""{{context_screen}}"""
+{{/context_screen}}
+
+**Adaptation Rules:**
+1.  **Spacing:**
+    *   *Prepend* a space to the fragment if needed for separation from the character before `[[cursor]]` (unless context already provides it or fragment starts with punctuation).
+    *   *Append* a space to the fragment if needed for separation from the character after `[[cursor]]` (unless context already provides it or fragment ends with punctuation).
+    *   Avoid creating double spaces.
+2.  **Capitalization:**
+    *   Capitalize the fragment's first word if `[[cursor]]` is at the start of the field or follows sentence-ending punctuation + space.
+    *   Otherwise, use lowercase (unless a proper noun or "I").
+3.  **Punctuation:**
+    *   End the fragment with sentence-ending punctuation (e.g., '.') if inserting it completes the sentence at `[[cursor]]`.
+    *   Do *not* add sentence-ending punctuation if the text continues after `[[cursor]]`. Add necessary internal punctuation (e.g., commas) within the fragment as grammatically needed.
+
+**Example:**
+*   Cleaned Text Fragment: `Is a great.`
+*   Input Field State: `The conference{{cursor}} success.`
+*   Resulting Fragment Output: `The conference is a great success` (leading space, removed capitalization, no trailing space as context provides it, no period)
+
+---
+Return ONLY the adapted text fragment that should be inserted at `[[cursor]]`. Do not include the full input field content, explanations, or extraneous text.
