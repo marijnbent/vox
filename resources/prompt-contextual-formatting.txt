@@ -25,7 +25,7 @@ You are tasked with adapting a pre-cleaned text fragment for insertion into an e
 
 **Example:**
 *   Cleaned Text Fragment: `Is a great.`
-*   Input Field State: `The conference{{cursor}} success.`
+*   Input Field State: `The conference[[cursor]] success.`
 *   Resulting Fragment Output: `The conference is a great success` (leading space, removed capitalization, no trailing space as context provides it, no period)
 
 ---
