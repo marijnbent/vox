@@ -2,31 +2,60 @@ import OpenAI from 'openai';
 import Mustache from 'mustache';
 import fs from 'fs/promises';
 import path from 'path';
+import { app } from 'electron'; // Added for path resolution
 import { EnhancementService } from './EnhancementService';
 import { logger } from '../logger';
 import store from '../store';
 import type { EnhancementSettings, EnhancementPrompt } from '../store';
 
-const DEFAULT_PROMPT_TEMPERATURE = 0.7; // Consistent default
+// Define constants for the new default prompts
+const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
+const DEFAULT_CONTEXTUAL_FORMATTING_ID = "default_contextual_formatting";
+
+const CLEAN_TRANSCRIPTION_PROMPT_FILENAME = "prompt-clean-transcription.txt";
+const CONTEXTUAL_FORMATTING_PROMPT_FILENAME = "prompt-contextual-formatting.txt";
+
+const DEFAULT_CLEAN_TRANSCRIPTION_TEMP = 0.1;
+const DEFAULT_CONTEXTUAL_FORMATTING_TEMP = 1.0;
+
+const FALLBACK_CLEAN_TEMPLATE = "Clean this: {{transcription}}";
+const FALLBACK_FORMATTING_TEMPLATE = "Format this: {{previous_output}}";
+
+// Helper function to read prompt file content with fallback
+async function readPromptFileContent(fileName: string, fallbackTemplate: string): Promise<string> {
+  try {
+    const basePath = app.isPackaged
+        ? process.resourcesPath
+        : path.join(app.getAppPath(), 'resources');
+    const filePath = path.join(basePath, fileName);
+    logger.debug(`Attempting to read default prompt file: ${filePath}`);
+    return await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    logger.error(`Failed to read default prompt file "${fileName}":`, error, `Using fallback.`);
+    return fallbackTemplate;
+  }
+}
 
 export class OpenaiEnhancementService implements EnhancementService {
+  private defaultPrompts = new Map<string, { template: string; temperature: number }>();
 
-  // Helper to get the default prompt content
-  private async getDefaultPromptTemplate(): Promise<string> {
-    try {
-      // Assuming store.path gives the path to the config file, navigate relative to it
-      // This might need adjustment based on actual electron-store behavior or app structure
-      const storeDir = path.dirname(store.path);
-      const resourcesPath = path.join(storeDir, '../../resources'); // Adjust relative path if needed
-      const defaultPromptPath = path.join(resourcesPath, 'default-prompt.txt');
-      logger.debug(`Attempting to read default prompt from: ${defaultPromptPath}`);
-      const content = await fs.readFile(defaultPromptPath, 'utf-8');
-      return content;
-    } catch (error) {
-        logger.error('Failed to read default prompt template:', error);
-        // Fallback to a very basic template if file reading fails
-        return 'Format the following transcription:\n\n{{transcription}}';
-    }
+  constructor() {
+    this.initializeDefaultPrompts();
+  }
+
+  private async initializeDefaultPrompts(): Promise<void> {
+    const cleanTemplate = await readPromptFileContent(CLEAN_TRANSCRIPTION_PROMPT_FILENAME, FALLBACK_CLEAN_TEMPLATE);
+    this.defaultPrompts.set(DEFAULT_CLEAN_TRANSCRIPTION_ID, {
+      template: cleanTemplate,
+      temperature: DEFAULT_CLEAN_TRANSCRIPTION_TEMP,
+    });
+
+    const formatTemplate = await readPromptFileContent(CONTEXTUAL_FORMATTING_PROMPT_FILENAME, FALLBACK_FORMATTING_TEMPLATE);
+    this.defaultPrompts.set(DEFAULT_CONTEXTUAL_FORMATTING_ID, {
+      template: formatTemplate,
+      temperature: DEFAULT_CONTEXTUAL_FORMATTING_TEMP,
+    });
+    logger.info('Default enhancement prompts initialized.');
   }
 
   async enhance(
@@ -49,22 +78,35 @@ export class OpenaiEnhancementService implements EnhancementService {
 
     const enhancementSettings = store.get('enhancements') as EnhancementSettings;
     const customPrompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
-    const activeChainIds = enhancementSettings.activePromptChain || ['default']; // Ensure chain exists
+    const activeChainIds = enhancementSettings.activePromptChain || [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID];
 
     if (activeChainIds.length === 0) {
         logger.warn('Enhancement chain is empty. Returning original text.');
-        return initialText;
+        // This case should ideally be prevented by store defaults, but as a safeguard:
+        activeChainIds.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
+        logger.info('Defaulting to two-step enhancement chain as active chain was empty.');
     }
 
-    const defaultPromptTemplate = await this.getDefaultPromptTemplate();
+    // Ensure default prompts are loaded if constructor hasn't finished or failed silently
+    if (this.defaultPrompts.size === 0) {
+        logger.warn('Default prompts not initialized, attempting to initialize now.');
+        await this.initializeDefaultPrompts();
+        if (this.defaultPrompts.size === 0) {
+            logger.error('Failed to initialize default prompts. Enhancement may not work as expected.');
+            // Potentially throw an error or return initialText if critical
+        }
+    }
+    
+    // Create a new promptMap for this enhancement call
+    // Start with the initialized default prompts
+    const promptMap = new Map(this.defaultPrompts);
 
-    // Create a map for easy lookup, including the default prompt details
-    const promptMap = new Map<string, { template: string; temperature: number }>();
-    promptMap.set('default', { template: defaultPromptTemplate, temperature: DEFAULT_PROMPT_TEMPERATURE });
+    // Layer custom prompts on top, potentially overriding defaults if IDs clash (though unlikely with UUIDs for custom)
+    // And apply a default temperature for custom prompts if not specified.
+    const globalDefaultTempForCustom = 0.7; // Or fetch from settings if it becomes configurable
     customPrompts.forEach(p => {
-        promptMap.set(p.id, { template: p.template, temperature: p.temperature ?? DEFAULT_PROMPT_TEMPERATURE });
+        promptMap.set(p.id, { template: p.template, temperature: p.temperature ?? globalDefaultTempForCustom });
     });
-
 
     let currentText = initialText; // Start with the original transcription
 

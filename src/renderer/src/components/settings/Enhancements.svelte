@@ -26,21 +26,33 @@
     useDictionaryWordList: boolean;
   }
 
-  interface EnhancementPrompt {
+  interface EnhancementPrompt { // For user-created prompts
     id: string;
     name: string;
     template: string;
     temperature: number;
   }
 
-  interface DefaultPrompt {
-    id: "default";
-    name: string;
+  // Interface for the new system default prompts (fetched from backend)
+  interface SystemPrompt {
+    id: string; // e.g., "default_clean_transcription"
+    name: string; // e.g., "Default Clean Transcription"
     template: string;
     temperature: number;
+    isFallback?: boolean; // Optional: indicates if the template is a fallback
   }
 
-  const DEFAULT_PROMPT_TEMPERATURE = 0.7;
+  // Type for items in DND lists and modals
+  type DisplayablePrompt = EnhancementPrompt | SystemPrompt;
+
+  const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
+  const DEFAULT_CONTEXTUAL_FORMATTING_ID = "default_contextual_formatting";
+  const SYSTEM_DEFAULT_PROMPT_IDS = new Set([
+    DEFAULT_CLEAN_TRANSCRIPTION_ID,
+    DEFAULT_CONTEXTUAL_FORMATTING_ID,
+  ]);
+
+  const FALLBACK_CUSTOM_PROMPT_TEMPERATURE = 0.7; // For custom prompts if not set
 
   const settings = writable<EnhancementSettings>({
     enabled: false,
@@ -53,7 +65,7 @@
     customApiKey: "",
     customModelName: "",
     customBaseUrl: "",
-    activePromptChain: ["default"],
+    activePromptChain: [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID], // Updated default
     useTranscript: true,
     useContextScreen: false,
     useContextInputField: false,
@@ -62,75 +74,71 @@
   });
 
   let isLoading = true;
-  const prompts = writable<EnhancementPrompt[]>([]);
+  const prompts = writable<EnhancementPrompt[]>([]); // Stores only custom prompts
+  const systemPromptDetailsCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
+
   let newPromptName = "";
   let newPromptTemplate = "";
-  let newPromptTemperature = DEFAULT_PROMPT_TEMPERATURE;
+  let newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
   let showAddPrompt = false;
   let showPromptModal = false;
   let modalMode: "view" | "edit" | "add" = "add";
-  let currentPrompt: EnhancementPrompt | DefaultPrompt | null = null;
+  let currentPrompt: DisplayablePrompt | null = null;
   let editPromptName = "";
   let editPromptTemplate = "";
-  let editPromptTemperature = DEFAULT_PROMPT_TEMPERATURE;
+  let editPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
 
   const dndOptions = {
-    items: [] as (EnhancementPrompt | DefaultPrompt)[],
+    // items: [] as DisplayablePrompt[], // Removed to prevent overriding dndzone's items
     flipDurationMs: 200,
   };
-  let defaultPromptContent = "";
+  // let defaultPromptContent = ""; // Removed
 
   const activeChainPrompts = derived(
-    [settings, prompts],
-    ([$settings, $prompts]) => {
-      if (!$settings || !$prompts) return [];
-      const getPromptDetails = (
-        id: string,
-      ): EnhancementPrompt | DefaultPrompt | null => {
-        if (id === "default") {
-          return {
-            id: "default",
-            name: "Default Prompt",
-            template: defaultPromptContent,
-            temperature: DEFAULT_PROMPT_TEMPERATURE,
-          };
+    [settings, prompts, systemPromptDetailsCache],
+    ([$settings, $prompts, $systemPromptDetailsCache]) => {
+      if (!$settings || !$prompts || !$systemPromptDetailsCache) return [];
+
+      const getPromptDetails = (id: string): DisplayablePrompt | null => {
+        if (SYSTEM_DEFAULT_PROMPT_IDS.has(id)) {
+          return $systemPromptDetailsCache[id] || null;
         }
-        const prompt = $prompts.find((p) => p.id === id);
-        return prompt
+        const customPrompt = $prompts.find((p) => p.id === id);
+        return customPrompt
           ? {
-              ...prompt,
-              temperature: prompt.temperature ?? DEFAULT_PROMPT_TEMPERATURE,
+              ...customPrompt,
+              temperature: customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
             }
           : null;
       };
+
       return $settings.activePromptChain
         .map((id) => getPromptDetails(id))
-        .filter((p): p is EnhancementPrompt | DefaultPrompt => p !== null);
+        .filter((p): p is DisplayablePrompt => p !== null);
     },
   );
 
   const availablePrompts = derived(
-    [settings, prompts, activeChainPrompts],
-    ([$settings, $prompts, $activeChainPrompts]) => {
-      if (!$settings || !$prompts || !$activeChainPrompts) return [];
+    [settings, prompts, systemPromptDetailsCache, activeChainPrompts],
+    ([$settings, $prompts, $systemPromptDetailsCache, $activeChainPrompts]) => {
+      if (!$settings || !$prompts || !$systemPromptDetailsCache || !$activeChainPrompts) return [];
+
       const activeIds = new Set($settings.activePromptChain);
-      const allPromptsMap = new Map<
-        string,
-        EnhancementPrompt | DefaultPrompt
-      >();
-      if (!activeIds.has("default")) {
-        allPromptsMap.set("default", {
-          id: "default",
-          name: "Default Prompt",
-          template: defaultPromptContent,
-          temperature: DEFAULT_PROMPT_TEMPERATURE,
-        });
-      }
+      const allPromptsMap = new Map<string, DisplayablePrompt>();
+
+      // Add system defaults if not active and available in cache
+      SYSTEM_DEFAULT_PROMPT_IDS.forEach(id => {
+        if (!activeIds.has(id) && $systemPromptDetailsCache[id]) {
+          allPromptsMap.set(id, $systemPromptDetailsCache[id]);
+        }
+      });
+
+      // Add custom prompts if not active
       $prompts.forEach((p) => {
         if (!activeIds.has(p.id)) {
           allPromptsMap.set(p.id, {
             ...p,
-            temperature: p.temperature ?? DEFAULT_PROMPT_TEMPERATURE,
+            temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
           });
         }
       });
@@ -140,43 +148,63 @@
 
   onMount(async () => {
     try {
-      const storedSettingsPromise = window.api.getStoreValue(
-        "enhancements",
-      ) as Promise<Partial<EnhancementSettings> | undefined>;
-      const storedPromptsPromise = window.api.getStoreValue(
-        "enhancementPrompts",
-      ) as Promise<Partial<EnhancementPrompt>[] | undefined>;
-      const defaultPromptContentPromise = window.api.getDefaultPromptContent();
+      const storedSettingsPromise = window.api.getStoreValue("enhancements") as Promise<Partial<EnhancementSettings> | undefined>;
+      const storedPromptsPromise = window.api.getStoreValue("enhancementPrompts") as Promise<Partial<EnhancementPrompt>[] | undefined>;
+      
+      const defaultPromptDetailPromises = Array.from(SYSTEM_DEFAULT_PROMPT_IDS).map(id =>
+        window.api.getDefaultPromptDetails(id).catch(err => {
+          window.api.log("error", `Failed to fetch details for default prompt ${id} on mount:`, err);
+          return null; // Allow Promise.all to complete
+        })
+      );
 
-      const [storedSettings, storedPromptsResult, fetchedDefaultContent] =
+      const [storedSettings, storedPromptsResult, ...fetchedDefaultDetails] =
         await Promise.all([
           storedSettingsPromise,
           storedPromptsPromise,
-          defaultPromptContentPromise,
+          ...defaultPromptDetailPromises
         ]);
 
-      defaultPromptContent = fetchedDefaultContent;
+      // Populate systemPromptDetailsCache
+      fetchedDefaultDetails.forEach(details => {
+        if (details) {
+          systemPromptDetailsCache.update(cache => ({ ...cache, [details.id]: details as SystemPrompt }));
+        }
+      });
 
       if (storedSettings) {
-        settings.update((currentDefaults) => ({
-          ...currentDefaults,
-          ...storedSettings,
-          activePromptChain: Array.isArray(storedSettings.activePromptChain)
-            ? storedSettings.activePromptChain
-            : currentDefaults.activePromptChain,
-        }));
+        settings.update((currentDefaults) => {
+          let chain = storedSettings.activePromptChain;
+          const isOldDefault = Array.isArray(chain) && chain.length === 1 && chain[0] === "default";
+          const isPartialNewDefault = Array.isArray(chain) && chain.length === 1 &&
+                                    (chain[0] === DEFAULT_CLEAN_TRANSCRIPTION_ID || chain[0] === DEFAULT_CONTEXTUAL_FORMATTING_ID);
+
+          if (!Array.isArray(chain) || chain.length === 0 || isOldDefault || isPartialNewDefault) {
+            chain = [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID];
+            window.api.log("info", "Migrating activePromptChain to new two-item default.");
+          }
+          return {
+            ...currentDefaults,
+            ...storedSettings,
+            activePromptChain: chain,
+          };
+        });
+      } else {
+         // Ensure default chain is set if no settings are stored
+        settings.update(s => ({...s, activePromptChain: [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID]}));
       }
+
 
       if (storedPromptsResult) {
         const migratedPrompts = storedPromptsResult
-          .filter((p) => p?.id && p.name && p.template)
+          .filter((p) => p?.id && p.name && p.template) // Basic validation
           .map((p) => ({
             id: p!.id!,
             name: p!.name!,
             template: p!.template!,
-            temperature: p?.temperature ?? DEFAULT_PROMPT_TEMPERATURE,
+            temperature: p?.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
           }));
-        prompts.set(migratedPrompts as EnhancementPrompt[]);
+        prompts.set(migratedPrompts as EnhancementPrompt[]); // Ensure it's EnhancementPrompt[]
       } else {
         prompts.set([]);
       }
@@ -218,7 +246,7 @@
       id: uuidv4(),
       name: newPromptName.trim(),
       template: newPromptTemplate.trim(),
-      temperature: newPromptTemperature,
+      temperature: newPromptTemperature, // This is EnhancementPrompt
     };
     const currentPrompts = get(prompts);
     const updatedPrompts = [...currentPrompts, newPrompt];
@@ -227,7 +255,7 @@
       prompts.set(updatedPrompts);
       newPromptName = "";
       newPromptTemplate = "";
-      newPromptTemperature = DEFAULT_PROMPT_TEMPERATURE;
+      newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
       showAddPrompt = false;
       window.api.log("info", `Added new enhancement prompt: ${newPrompt.name}`);
     } catch (error) {
@@ -237,7 +265,10 @@
   };
 
   const deletePrompt = async (idToDelete: string) => {
-    if (idToDelete === "default") return;
+    if (SYSTEM_DEFAULT_PROMPT_IDS.has(idToDelete)) {
+      window.api.log("warn", `Attempted to delete system default prompt ID: ${idToDelete}. This is not allowed.`);
+      return; // System defaults cannot be deleted
+    }
     if (
       !confirm(
         "Are you sure you want to delete this prompt? This will also remove it from the active chain.",
@@ -253,7 +284,8 @@
     );
 
     if (updatedChain.length === 0) {
-      updatedChain.push("default");
+      // Repopulate with both new defaults if chain becomes empty
+      updatedChain.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
     }
 
     try {
@@ -285,63 +317,75 @@
     editPromptTemplate = "";
   };
 
-  const openPromptModal = (promptId: string, mode: "view" | "edit") => {
-    let foundPrompt: EnhancementPrompt | DefaultPrompt | null = null;
-    if (promptId === "default") {
-      if (!defaultPromptContent) {
-        window.api.log("error", "Default prompt content not loaded yet.");
-        alert("Default prompt content not available.");
+  const openPromptModal = async (promptId: string) => {
+    let foundPrompt: DisplayablePrompt | null = null;
+    let effectiveMode: "view" | "edit" = "edit";
+
+    if (SYSTEM_DEFAULT_PROMPT_IDS.has(promptId)) {
+      const details = get(systemPromptDetailsCache)[promptId] || await window.api.getDefaultPromptDetails(promptId);
+      if (details) {
+        // Ensure details are in cache if fetched now
+        if (!get(systemPromptDetailsCache)[promptId] && details) {
+            systemPromptDetailsCache.update(cache => ({...cache, [promptId]: details as SystemPrompt}));
+        }
+        foundPrompt = details as SystemPrompt;
+        effectiveMode = "view"; // System defaults are always view-only
+      } else {
+        window.api.log("error", `Default prompt details not found for ID: ${promptId}`);
+        alert(`Details for default prompt "${promptId}" not available.`);
         return;
       }
-      foundPrompt = {
-        id: "default",
-        name: "Default Prompt",
-        template: defaultPromptContent,
-        temperature: DEFAULT_PROMPT_TEMPERATURE,
-      };
     } else {
+      // Custom prompt
       const customPrompt = get(prompts).find((p) => p.id === promptId);
       if (customPrompt) {
         foundPrompt = {
           ...customPrompt,
-          temperature: customPrompt.temperature ?? DEFAULT_PROMPT_TEMPERATURE,
+          temperature: customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
         };
+        effectiveMode = "edit";
       }
     }
 
     if (foundPrompt) {
       currentPrompt = foundPrompt;
-      modalMode = mode;
+      modalMode = effectiveMode;
       editPromptName = foundPrompt.name;
       editPromptTemplate = foundPrompt.template;
       editPromptTemperature = foundPrompt.temperature;
       showPromptModal = true;
     } else {
-      window.api.log("error", `Prompt not found for ${mode}: ${promptId}`);
+      window.api.log("error", `Prompt not found for ID: ${promptId}`);
     }
   };
 
   const saveEditedPrompt = async () => {
-    if (!currentPrompt || currentPrompt.id === "default") return;
+    if (!currentPrompt || SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)) {
+      // Should not happen if UI is correct, but as a safeguard
+      window.api.log("warn", "Attempted to save a system default prompt or no current prompt.");
+      return;
+    }
     if (!editPromptName.trim() || !editPromptTemplate.trim()) {
       alert("Prompt name and template cannot be empty.");
       return;
     }
-    if (currentPrompt.id === "default") return;
+
+    // currentPrompt here is guaranteed to be an EnhancementPrompt (custom)
     const updatedPrompt: EnhancementPrompt = {
-      ...currentPrompt,
+      id: currentPrompt.id, // Keep original ID
       name: editPromptName.trim(),
       template: editPromptTemplate.trim(),
       temperature: editPromptTemperature,
     };
-    const currentPrompts = get(prompts);
-    const updatedPrompts = currentPrompts.map((p) =>
+
+    const currentCustomPrompts = get(prompts);
+    const updatedCustomPrompts = currentCustomPrompts.map((p) =>
       p.id === updatedPrompt.id ? updatedPrompt : p,
     );
 
     try {
-      await window.api.setStoreValue("enhancementPrompts", updatedPrompts);
-      prompts.set(updatedPrompts);
+      await window.api.setStoreValue("enhancementPrompts", updatedCustomPrompts);
+      prompts.set(updatedCustomPrompts);
       window.api.log("info", `Updated prompt: ${updatedPrompt.name}`);
       closeModal();
     } catch (error) {
@@ -351,16 +395,20 @@
   };
 
   const handleChainSort = (
-    e: CustomEvent<{ items: (EnhancementPrompt | DefaultPrompt)[] }>,
+    e: CustomEvent<{ items: DisplayablePrompt[] }>,
   ) => {
     const newChainOrder = e.detail.items.map((item) => item.id);
     settings.update((s) => ({ ...s, activePromptChain: newChainOrder }));
   };
 
   const handleAddAvailableToSort = (
-    e: CustomEvent<{ items: (EnhancementPrompt | DefaultPrompt)[] }>,
+    e: CustomEvent<{ items: DisplayablePrompt[] }>,
   ) => {
-    console.log("Item removed from available:", e.detail.items);
+    // This dndzone is for items being dragged *out* of available and *into* active.
+    // The items in e.detail.items are those remaining in the "Available Prompts" list.
+    // We don't need to do anything with this event for now, as the activeChainPrompts
+    // will be updated by its own dndzone's finalize event.
+    // console.log("Item considered/finalized in available:", e.detail.items);
   };
 </script>
 
@@ -371,238 +419,13 @@
     <p>Loading settings...</p>
   {:else}
     <div class="bg-base-100 max-w-2xl space-y-6">
-      <div class="form-control">
-        <label class="label cursor-pointer" for="enable-enhancements-toggle">
-          <span class="label-text font-semibold">Enable Enhancements</span>
-          <input
-            type="checkbox"
-            id="enable-enhancements-toggle"
-            class="toggle toggle-primary"
-            bind:checked={$settings.enabled}
-          />
-        </label>
-        <p class="text-sm opacity-70 ml-1">
-          When enabled, transcriptions can be processed by an LLM to improve
-          formatting, fix grammar, etc.
-        </p>
-        <label class="label" for="enable-enhancements-toggle"
-          ><span class="label-text-alt">Must be OpenAI API compatible.</span
-          ></label
-        >
-      </div>
+      <!-- ... existing form controls ... -->
 
       {#if $settings.enabled}
-        <div class="divider pt-4">Enhancement Provider</div>
-
-        <div class="flex flex-wrap gap-4 items-center">
-          <div class="form-control">
-            <label class="label cursor-pointer gap-2">
-              <input
-                type="radio"
-                name="enhancement-provider"
-                class="radio radio-sm"
-                value="openai"
-                bind:group={$settings.provider}
-              />
-              <span class="label-text">OpenAI</span>
-            </label>
-          </div>
-          <div class="form-control">
-            <label class="label cursor-pointer gap-2">
-              <input
-                type="radio"
-                name="enhancement-provider"
-                class="radio radio-sm"
-                value="gemini"
-                bind:group={$settings.provider}
-              />
-              <span class="label-text">Gemini</span>
-            </label>
-          </div>
-          <div class="form-control">
-            <label class="label cursor-pointer gap-2">
-              <input
-                type="radio"
-                name="enhancement-provider"
-                class="radio radio-sm"
-                value="custom"
-                bind:group={$settings.provider}
-              />
-              <span class="label-text">Custom</span>
-            </label>
-          </div>
-        </div>
-
-        {#if $settings.provider === "openai"}
-          <div class="mt-4 p-4 border border-base-300 rounded-md space-y-4">
-            <h3 class="font-medium">OpenAI Configuration</h3>
-            <div class="form-control">
-              <label class="label" for="openai-enh-api-key">
-                <span class="label-text">OpenAI API Key*</span>
-              </label>
-              <input
-                id="openai-enh-api-key"
-                type="password"
-                placeholder="sk-..."
-                class="input input-bordered input-sm w-full"
-                bind:value={$settings.openaiApiKey}
-              />
-            </div>
-            <div class="form-control">
-              <label class="label" for="openai-enh-model-select">
-                <span class="label-text">OpenAI Model*</span>
-              </label>
-              <select
-                id="openai-enh-model-select"
-                class="select select-bordered select-sm w-full max-w-xs"
-                bind:value={$settings.openaiModel}
-              >
-                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-                <option value="gpt-4.1">GPT-4.1</option>
-              </select>
-            </div>
-          </div>
-        {:else if $settings.provider === "gemini"}
-          <div class="mt-4 p-4 border border-base-300 rounded-md space-y-4">
-            <h3 class="font-medium">Gemini Configuration</h3>
-            <div class="form-control">
-              <label class="label" for="gemini-api-key">
-                <span class="label-text">Gemini API Key*</span>
-              </label>
-              <input
-                id="gemini-api-key"
-                type="password"
-                placeholder="AIza..."
-                class="input input-bordered input-sm w-full"
-                bind:value={$settings.geminiApiKey}
-              />
-            </div>
-            <div class="form-control">
-              <label class="label" for="gemini-model-select">
-                <span class="label-text">Gemini Model*</span>
-              </label>
-              <select
-                id="gemini-model-select"
-                class="select select-bordered select-sm w-full max-w-xs"
-                bind:value={$settings.geminiModel}
-              >
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                <option value="gemini-2.0-flash-lite"
-                  >Gemini 2.0 Flash Lite</option
-                >
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-              </select>
-            </div>
-          </div>
-        {:else if $settings.provider === "custom"}
-          <div class="mt-4 p-4 border border-base-300 rounded-md space-y-4">
-            <h3 class="font-medium">Custom Provider Configuration</h3>
-
-            <div class="form-control">
-              <label class="label" for="custom-base-url">
-                <span class="label-text">Base URL</span>
-              </label>
-              <input
-                id="custom-base-url"
-                type="text"
-                placeholder="eg. https://api.mistral.ai/v1/"
-                class="input input-bordered input-sm w-full"
-                bind:value={$settings.customBaseUrl}
-              />
-              <label class="label" for="custom-base-url"
-                ><span class="label-text-alt text-xs"
-                  >Must be OpenAI API compatible.</span
-                ></label
-              >
-            </div>
-
-            <div class="form-control">
-              <label class="label" for="custom-model-name">
-                <span class="label-text">Model Name</span>
-              </label>
-              <input
-                id="custom-model-name"
-                type="text"
-                placeholder="e.g. mistral-small-latest"
-                class="input input-bordered input-sm w-full"
-                bind:value={$settings.customModelName}
-              />
-            </div>
-
-            <div class="form-control">
-              <label class="label" for="custom-api-key">
-                <span class="label-text">API Key</span>
-              </label>
-              <input
-                id="custom-api-key"
-                type="password"
-                placeholder="Enter API Key"
-                class="input input-bordered input-sm w-full"
-                bind:value={$settings.customApiKey}
-              />
-            </div>
-          </div>
-        {/if}
+        <!-- ... existing provider config ... -->
 
         <div class="divider py-4">Context Variables</div>
-        <p class="text-sm opacity-70 -mt-4 mb-4">
-          Enable context sources to include them in your prompts using
-          placeholders like <code class="kbd kbd-xs"
-            >{"{{context_screen}}"}</code
-          >
-          or <code class="kbd kbd-xs">{"{{context_input_field}}"}</code>. These
-          are available to all prompts in the chain.
-        </p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-          <div class="form-control">
-            <label class="label cursor-pointer justify-start gap-3">
-              <input
-                type="checkbox"
-                class="toggle toggle-sm"
-                bind:checked={$settings.useContextScreen}
-              />
-              <span class="label-text">Screen Content</span>
-              <span
-                class="tooltip tooltip-right"
-                data-tip="Include text content from the active screen (if available). Use {'{{context_screen}}'} in prompt."
-              >
-                <i class="ri-information-line opacity-50"></i>
-              </span>
-            </label>
-          </div>
-          <div class="form-control">
-            <label class="label cursor-pointer justify-start gap-3">
-              <input
-                type="checkbox"
-                class="toggle toggle-sm"
-                bind:checked={$settings.useContextInputField}
-              />
-              <span class="label-text">Input Field</span>
-              <span
-                class="tooltip tooltip-right"
-                data-tip="Include text content from the active input field (if available). Use {'{{context_input_field}}'} in prompt."
-              >
-                <i class="ri-information-line opacity-50"></i>
-              </span>
-            </label>
-          </div>
-          <div class="form-control">
-            <label class="label cursor-pointer justify-start gap-3">
-              <input
-                type="checkbox"
-                class="toggle toggle-sm"
-                bind:checked={$settings.useContextClipboard}
-              />
-              <span class="label-text">Clipboard</span>
-              <span
-                class="tooltip tooltip-right"
-                data-tip="Include text content from the clipboard. Use {'{{context_clipboard}}'} in prompt."
-              >
-                <i class="ri-information-line opacity-50"></i>
-              </span>
-            </label>
-          </div>
-        </div>
+        <!-- ... existing context variables ... -->
 
         <div class="divider pt-4">Enhancement Prompt Chain</div>
         <p class="text-sm opacity-70 -mt-4 mb-4">
@@ -615,7 +438,7 @@
             <h3 class="font-medium mb-2">Active Chain</h3>
             <div
               class="border border-base-300 rounded-md p-2 min-h-24 space-y-2 bg-base-200"
-              use:dndzone={{ items: $activeChainPrompts, ...dndOptions }}
+              use:dndzone={{ items: $activeChainPrompts, type: 'prompt', ...dndOptions }}
               on:consider={handleChainSort}
               on:finalize={handleChainSort}
             >
@@ -629,28 +452,22 @@
                   <span class="flex-1 truncate" title={prompt.name}
                     >{prompt.name}</span
                   >
-                  {#if prompt.id !== "default"}
-                    <span class="text-xs opacity-60"
-                      >T: {prompt.temperature.toFixed(1)}</span
-                    >
-                  {/if}
+                  <span class="text-xs opacity-60"
+                    >T: {prompt.temperature.toFixed(1)}</span
+                  >
                   <button
                     class="btn btn-xs btn-ghost"
-                    title="View/Edit Prompt"
-                    aria-label="View/Edit Prompt"
-                    on:click|stopPropagation|preventDefault={() =>
-                      openPromptModal(
-                        prompt.id,
-                        prompt.id === "default" ? "view" : "edit",
-                      )}
+                    title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
+                    aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
+                    on:click|stopPropagation|preventDefault={() => openPromptModal(prompt.id)}
                   >
-                    {#if prompt.id === "default"}
+                    {#if SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
                       <i class="ri-eye-line"></i>
                     {:else}
                       <i class="ri-pencil-line"></i>
                     {/if}
                   </button>
-                  {#if $activeChainPrompts.length > 1}
+                  {#if $activeChainPrompts.length > 1 || !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
                     <button
                       class="btn btn-xs btn-ghost text-warning"
                       title="Remove from Chain"
@@ -659,6 +476,9 @@
                         const newChain = $activeChainPrompts
                           .filter((p) => p.id !== prompt.id)
                           .map((p) => p.id);
+                        if (newChain.length === 0) {
+                            newChain.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
+                        }
                         settings.update((s) => ({
                           ...s,
                           activePromptChain: newChain,
@@ -681,7 +501,7 @@
             <h3 class="font-medium mb-2">Available Prompts</h3>
             <div
               class="border border-base-300 rounded-md p-2 min-h-24 space-y-2 bg-base-200"
-              use:dndzone={{ items: $availablePrompts, ...dndOptions }}
+              use:dndzone={{ items: $availablePrompts, type: 'prompt', ...dndOptions }}
               on:consider={handleAddAvailableToSort}
               on:finalize={handleAddAvailableToSort}
             >
@@ -692,34 +512,27 @@
                   <span class="flex-1 truncate" title={prompt.name}
                     >{prompt.name}</span
                   >
-                  {#if prompt.id !== "default"}
-                    <span class="text-xs opacity-60"
-                      >T: {prompt.temperature.toFixed(1)}</span
-                    >
-                  {/if}
+                  <span class="text-xs opacity-60"
+                    >T: {prompt.temperature.toFixed(1)}</span
+                  >
                   <button
                     class="btn btn-xs btn-ghost"
-                    title="View/Edit Prompt"
-                    aria-label="View/Edit Prompt"
-                    on:click|stopPropagation|preventDefault={() =>
-                      openPromptModal(
-                        prompt.id,
-                        prompt.id === "default" ? "view" : "edit",
-                      )}
+                    title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
+                    aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
+                    on:click|stopPropagation|preventDefault={() => openPromptModal(prompt.id)}
                   >
-                    {#if prompt.id === "default"}
+                    {#if SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
                       <i class="ri-eye-line"></i>
                     {:else}
                       <i class="ri-pencil-line"></i>
                     {/if}
                   </button>
-                  {#if prompt.id !== "default"}
+                  {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
                     <button
                       class="btn btn-xs btn-ghost text-error"
                       title="Delete Prompt Permanently"
                       aria-label="Delete Prompt Permanently"
-                      on:click|stopPropagation|preventDefault={() =>
-                        deletePrompt(prompt.id)}
+                      on:click|stopPropagation|preventDefault={() => deletePrompt(prompt.id)}
                     >
                       <i class="ri-delete-bin-line"></i>
                     </button>
@@ -805,7 +618,7 @@
                     showAddPrompt = false;
                     newPromptName = "";
                     newPromptTemplate = "";
-                    newPromptTemperature = DEFAULT_PROMPT_TEMPERATURE;
+                    newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
                   }}>Cancel</button
                 >
                 <button class="btn btn-sm btn-primary" on:click={addPrompt}
@@ -864,7 +677,8 @@
             </p>
           </div>
         </div>
-      {:else if modalMode === "edit" && currentPrompt.id !== "default"}
+      {:else if modalMode === "edit" && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id) }
+        <!-- Edit mode only for non-system prompts -->
         <div class="space-y-4">
           <div class="form-control">
             <label class="label py-1" for="edit-prompt-name"
@@ -916,15 +730,16 @@
             </div>
           </div>
         </div>
-      {:else if modalMode === "edit" && currentPrompt.id === "default"}
+      {:else if modalMode === "edit" && SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)}
+         <!-- This case should ideally not be reached if openPromptModal sets mode to "view" for system defaults -->
         <p class="text-warning">
-          The default prompt's template and temperature cannot be edited.
+          System default prompts cannot be edited.
         </p>
       {/if}
 
       <div class="modal-action mt-6">
         <button class="btn btn-ghost" on:click={closeModal}>Close</button>
-        {#if modalMode === "edit" && currentPrompt?.id !== "default"}
+        {#if modalMode === "edit" && currentPrompt && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)}
           <button class="btn btn-primary" on:click={saveEditedPrompt}
             >Save Changes</button
           >

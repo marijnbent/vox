@@ -45,7 +45,8 @@ declare global {
       notifySilenceCancellation: () => void,
       notifyRecorderStarted: () => void;
       getFocusedInputFieldText: () => Promise<{ text: string; selectedRange?: { start: number; length: number } } | null>;
-      getDefaultPromptContent: () => Promise<string>;
+      // getDefaultPromptContent: () => Promise<string>; // Removed
+      getDefaultPromptDetails: (id: string) => Promise<{ id: string; name: string; template: string; temperature: number; isFallback?: boolean } | null>; // Added
       getLogFilePath: () => Promise<string>;
       getLogLines: (lineCount?: number) => Promise<string[]>;
       playSystemSound: (soundName: string) => Promise<void>;

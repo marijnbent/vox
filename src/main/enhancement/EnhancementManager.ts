@@ -1,31 +1,11 @@
-import fs from 'fs';
-import path from 'path';
-import { app } from 'electron';
 import { EnhancementService } from './EnhancementService';
 import { OpenaiEnhancementService } from './OpenaiEnhancementService';
 import store from '../store';
 import { logger } from '../logger';
-import type { EnhancementSettings, EnhancementPrompt } from '../store';
+import type { EnhancementSettings } from '../store'; // EnhancementPrompt is not used here anymore
 
-export function getDefaultPromptTemplate(): string {
-  try {
-    const basePath = app.isPackaged
-        ? path.join(process.resourcesPath)
-        : path.join(app.getAppPath(), 'resources');
-    const filePath = path.join(basePath, 'default-prompt.txt');
-
-    if (fs.existsSync(filePath)) {
-      logger.debug(`Loading default prompt from: ${filePath}`);
-      return fs.readFileSync(filePath, 'utf-8');
-    } else {
-      logger.error(`Default prompt file not found at: ${filePath}. Using fallback.`);
-      return `Please enhance the following transcription for clarity, grammar, and formatting. Keep the original meaning intact:\n\n{{transcription}}`;
-    }
-  } catch (error) {
-    logger.error('Error reading default prompt file:', error);
-    return `Please enhance the following transcription for clarity, grammar, and formatting. Keep the original meaning intact:\n\n{{transcription}}`;
-  }
-}
+// getDefaultPromptTemplate function removed as it's no longer needed.
+// The OpenaiEnhancementService now handles its own default prompt loading.
 
 export class EnhancementManager {
   private enhancementService: EnhancementService;
@@ -35,20 +15,9 @@ export class EnhancementManager {
     logger.info('Enhancement Manager initialized using OpenaiEnhancementService for all providers.');
   }
 
-  private getActivePromptTemplate(settings: EnhancementSettings): string {
-    if (settings.activePromptId === 'default') {
-      return getDefaultPromptTemplate();
-    }
-    const customPrompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
-    const activePrompt = customPrompts.find(p => p.id === settings.activePromptId);
-    if (activePrompt) {
-      logger.info(`Using custom enhancement prompt: ${activePrompt.name}`);
-      return activePrompt.template;
-    } else {
-      logger.warn(`Active custom prompt ID "${settings.activePromptId}" not found. Falling back to default prompt.`);
-      return getDefaultPromptTemplate();
-    }
-  }
+  // getActivePromptTemplate method removed.
+  // The OpenaiEnhancementService now manages the prompt chain internally
+  // based on settings.activePromptChain.
 
   public async enhance(text: string): Promise<string> {
     const settings = store.get('enhancements') as EnhancementSettings;
@@ -63,7 +32,7 @@ export class EnhancementManager {
       return text;
     }
 
-    const promptTemplate = this.getActivePromptTemplate(settings);
+    // const promptTemplate = this.getActivePromptTemplate(settings); // Removed
     let apiKey = '';
     let model = '';
     let apiEndpoint: string | undefined = undefined;
@@ -101,7 +70,7 @@ export class EnhancementManager {
     try {
       const enhancedText = await this.enhancementService.enhance(
           text,
-          promptTemplate,
+          // promptTemplate, // Removed
           apiKey,
           model,
           apiEndpoint

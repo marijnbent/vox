@@ -1,12 +1,13 @@
 import Mustache from 'mustache';
-import { ipcMain, systemPreferences, shell, clipboard } from 'electron';
+import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron'; // Added app
 import { exec } from 'child_process';
 import fs from 'fs/promises';
+import path from 'path'; // Added path
 import log from 'electron-log';
 import store from '../store';
 import { logger } from '../logger';
 import { TranscriptionManager } from '../transcription/TranscriptionManager';
-import { EnhancementManager, getDefaultPromptTemplate } from '../enhancement/EnhancementManager';
+import { EnhancementManager } from '../enhancement/EnhancementManager'; // Removed getDefaultPromptTemplate
 import * as historyService from '../historyService';
 import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
@@ -107,8 +108,55 @@ export function setupIpcHandlers(): void {
         sendToWidget('widget-recorder-started');
     });
 
-    ipcMain.handle('getDefaultPromptContent', () => {
-      return getDefaultPromptTemplate();
+    // Removed old getDefaultPromptContent handler
+
+    // New handler for specific default prompt details
+    ipcMain.handle('getDefaultPromptDetails', async (_event, id: string) => {
+      const DEFAULT_PROMPTS_CONFIG = {
+        "default_clean_transcription": {
+          name: "Default Clean Transcription",
+          filePath: "resources/prompt-clean-transcription.txt",
+          temperature: 0.1,
+          fallbackTemplate: "Clean this: {{transcription}}"
+        },
+        "default_contextual_formatting": {
+          name: "Default Contextual Formatting",
+          filePath: "resources/prompt-contextual-formatting.txt",
+          temperature: 1.0,
+          fallbackTemplate: "Format this: {{previous_output}}"
+        }
+      };
+
+      const config = DEFAULT_PROMPTS_CONFIG[id as keyof typeof DEFAULT_PROMPTS_CONFIG];
+      if (!config) {
+        logger.error(`[IPC] getDefaultPromptDetails: Unknown default prompt ID requested: ${id}`);
+        return null;
+      }
+
+      try {
+        const basePath = app.isPackaged
+            ? process.resourcesPath
+            : path.join(app.getAppPath()); // resources subdir is part of config.filePath
+        const fullFilePath = path.join(basePath, config.filePath);
+
+        logger.debug(`[IPC] Attempting to read default prompt file for ID "${id}" from: ${fullFilePath}`);
+        const template = await fs.readFile(fullFilePath, 'utf-8');
+        return {
+          id: id,
+          name: config.name,
+          template: template,
+          temperature: config.temperature
+        };
+      } catch (error) {
+        logger.error(`[IPC] Failed to read default prompt file for ID "${id}" at ${config.filePath}:`, error);
+        return {
+          id: id,
+          name: config.name,
+          template: config.fallbackTemplate,
+          temperature: config.temperature,
+          isFallback: true
+        };
+      }
     });
 
     ipcMain.handle('getLogFilePath', () => {
@@ -215,66 +263,21 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
             enhancementAttempted = true;
             try {
                 logger.info('Applying enhancement...');
-                 const activePromptId = enhancementSettings.activePromptId;
-                 const customPrompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
-                 const activePrompt = customPrompts.find(p => p.id === activePromptId);
+                // The enhancementManager.enhance now handles the prompt chain internally.
+                // We don't need to render a single prompt here for history anymore.
+                // The OpenaiEnhancementService logs each step of the chain.
+                // For simplicity in history, we'll set finalPromptRendered to null.
 
-                 const activeTemplate = activePromptId === 'default'
-                     ? getDefaultPromptTemplate()
-                     : activePrompt?.template ?? getDefaultPromptTemplate();
+                // const contextData setup and Mustache.render for finalPromptRendered is removed.
+                // If specific context data is still needed by the enhancement service,
+                // it should be passed through or handled within the service itself.
+                // The current OpenaiEnhancementService already has logic for context variables.
 
-                 const contextData: { [key: string]: any } = { transcription: originalTranscriptionText };
-                 if (enhancementSettings.useContextScreen) {
-                   contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
-                 }
-                 if (enhancementSettings.useContextInputField) {
-                  logger.info('IPC: useContextInputField is true, attempting to get focused input field text...');
-                  try {
-                      const inputFieldContext = await handleGetFocusedInputFieldText();
-                      if (inputFieldContext && inputFieldContext.text) {
-                          let finalText = inputFieldContext.text;
-                          if (inputFieldContext.selectedRange && inputFieldContext.selectedRange.start !== -1) {
-                              const cursorPos = inputFieldContext.selectedRange.start;
-                              // Ensure cursor_pos is within bounds
-                              if (cursorPos >= 0 && cursorPos <= finalText.length) {
-                                  finalText = finalText.substring(0, cursorPos) + "[[cursor]]" + finalText.substring(cursorPos);
-                                  logger.info('IPC: Successfully added focused input field text to context with <cursor> marker.');
-                              } else {
-                                  logger.warn(`IPC: Cursor position ${cursorPos} out of bounds for text length ${finalText.length}. Not adding <cursor> marker.`);
-                                  logger.info('IPC: Successfully added focused input field text to context (no cursor marker due to bounds).');
-                              }
-                          } else {
-                              logger.info('IPC: Successfully added focused input field text to context (no cursor marker).');
-                          }
-                          contextData.context_input_field = finalText;
-                      } else {
-                          contextData.context_input_field = "";
-                          logger.info('IPC: No focused input field text found or feature unavailable, context_input_field set to empty.');
-                      }
-                  } catch (inputError) {
-                      logger.error('IPC: Error getting focused input field text:', inputError);
-                      contextData.context_input_field = "";
-                  }
-                 }
-                 if (enhancementSettings.useContextClipboard) {
-                   contextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
-                 }
-                 if (enhancementSettings.useDictionaryWordList) {
-                   const dictionaryWords = store.get('dictionary.words', []) as string[];
-                   contextData.dictionary_word_list = dictionaryWords.join(', ');
-                 }
+                finalPromptRendered = null; // Simplified for history
 
-                 try {
-                     finalPromptRendered = Mustache.render(activeTemplate, contextData);
-                     logger.debug(`IPC: Rendered prompt for history: ${finalPromptRendered.substring(0,100)}...`);
-                 } catch (renderError) {
-                     logger.error('IPC: Error rendering prompt for history:', renderError);
-                     finalPromptRendered = activeTemplate;
-                 }
+                const enhancedTextResult = await enhancementManager.enhance(originalTranscriptionText);
 
-                 const enhancedTextResult = await enhancementManager.enhance(originalTranscriptionText);
-
-                 if (enhancedTextResult !== originalTranscriptionText) {
+                if (enhancedTextResult !== originalTranscriptionText) {
                      logger.info(`IPC: Enhancement successful: "${enhancedTextResult}"`);
                      finalText = enhancedTextResult;
                  } else {
@@ -296,15 +299,17 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
         }
 
         try {
-            let promptIdForHistory: string | null = null;
+            let promptIdForHistory: string | null = null; // Simplified for history
             if (enhancementAttempted) {
-                promptIdForHistory = store.get('enhancements.activePromptId') as string ?? null;
+                // Optionally, store the chain as a string or just the first prompt ID
+                // For now, keeping it simple as null, as the service logs details.
+                // promptIdForHistory = enhancementSettings.activePromptChain.join(', ');
             }
             const historyEntryData: Omit<HistoryRecord, 'id' | 'timestamp'> = {
                 originalText: originalTranscriptionText,
-                renderedPrompt: finalPromptRendered,
+                renderedPrompt: finalPromptRendered, // Now null
                 enhancedText: finalText !== originalTranscriptionText ? finalText : null,
-                promptIdUsed: promptIdForHistory
+                promptIdUsed: promptIdForHistory // Now null
             };
             historyService.addHistoryEntry(historyEntryData);
         } catch(historyError) {

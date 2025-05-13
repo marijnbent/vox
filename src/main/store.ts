@@ -94,7 +94,7 @@ const store = new Store<StoreSchema>({
       customModelName: '',
       customBaseUrl: '',
       // activePromptId: 'default', // Ensure this is removed
-      activePromptChain: ['default'], // Default chain with only the default prompt
+      activePromptChain: ['default_clean_transcription', 'default_contextual_formatting'], // UPDATED default chain
       useTranscript: true,
       useContextScreen: false,
       useContextInputField: false,
