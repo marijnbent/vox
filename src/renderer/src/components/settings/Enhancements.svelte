@@ -3,47 +3,18 @@
   import { v4 as uuidv4 } from "uuid";
   import { writable, get, derived } from "svelte/store";
   import Multiselect from "svelte-multiselect";
+import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt } from "../../../../main/store";
 
-  interface EnhancementSettings {
-    enabled: boolean;
-    provider: "openai" | "gemini" | "custom";
-    openaiApiKey: string;
-    openaiModel: "gpt-4.1" | "gpt-4.1-mini";
-    openaiBaseUrl?: string;
-    geminiApiKey: string;
-    geminiModel:
-      | "gemini-2.0-flash"
-      | "gemini-2.5-flash"
-      | "gemini-2.0-flash-lite";
-    customApiKey: string;
-    customModelName: string;
-    customBaseUrl?: string;
-    activePromptChain: string[];
-    useTranscript: boolean;
-    useContextScreen: boolean;
-    useContextInputField: boolean;
-    useContextClipboard: boolean;
-    useDictionaryWordList: boolean;
-  }
-
-  interface EnhancementPrompt { // For user-created prompts
+  // Interface for the new system default prompts (fetched from backend)
+  interface SystemPrompt {
     id: string;
     name: string;
     template: string;
     temperature: number;
+    isFallback?: boolean;
   }
 
-  // Interface for the new system default prompts (fetched from backend)
-  interface SystemPrompt {
-    id: string; // e.g., "default_clean_transcription"
-    name: string; // e.g., "Default Clean Transcription"
-    template: string;
-    temperature: number;
-    isFallback?: boolean; // Optional: indicates if the template is a fallback
-  }
-
-  // Type for items in DND lists and modals
-  type DisplayablePrompt = EnhancementPrompt | SystemPrompt;
+  type DisplayablePrompt = StoreEnhancementPrompt | SystemPrompt;
 
   const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
   const DEFAULT_CONTEXTUAL_FORMATTING_ID = "default_contextual_formatting";
@@ -74,7 +45,7 @@
   });
 
   let isLoading = true;
-  const prompts = writable<EnhancementPrompt[]>([]); // Stores only custom prompts
+  const prompts = writable<StoreEnhancementPrompt[]>([]); // Stores only custom prompts
   const systemPromptDetailsCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
 
   let newPromptName = "";
@@ -87,11 +58,6 @@
   let editPromptName = "";
   let editPromptTemplate = "";
   let editPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-
-  // const dndOptions = { ... }; // Removed
-  // let defaultPromptContent = ""; // Removed
-
-  // Removed activeChainPrompts and availablePrompts derived stores
 
   // Create a new derived store for all prompts, suitable for Multiselect and general listing
   const allDisplayablePrompts = derived(
@@ -116,28 +82,39 @@
       return Array.from(uniquePrompts.values());
     }
   );
-  
-  // This will hold the prompt *objects* selected in the Multiselect
-  // It needs to be initialized based on the IDs in $settings.activePromptChain
-  let selectedPromptObjects: DisplayablePrompt[] = [];
 
-  // Reactive statement to update selectedPromptObjects when $settings.activePromptChain or $allDisplayablePrompts changes
+  // Type for the objects used by Multiselect options and its selection
+  interface MappedPromptOption {
+    value: string; // Prompt ID
+    label: string; // Prompt Name
+    original: DisplayablePrompt; // The full prompt object
+  }
+  
+  // This will hold the MappedPromptOption objects selected in the Multiselect
+  let selectedMappedOptions: MappedPromptOption[] = [];
+
+  // Reactive statement to update selectedMappedOptions when $settings.activePromptChain or $allDisplayablePrompts changes
   $: {
     if ($settings && $allDisplayablePrompts) {
       const currentActiveChainIds = $settings.activePromptChain;
-      selectedPromptObjects = currentActiveChainIds
-        .map(id => $allDisplayablePrompts.find(p => p.id === id))
-        .filter(p => p !== undefined) as DisplayablePrompt[];
+      selectedMappedOptions = currentActiveChainIds
+        .map(id => {
+          const originalPrompt = $allDisplayablePrompts.find(p => p.id === id);
+          if (originalPrompt) {
+            return { value: originalPrompt.id, label: originalPrompt.name, original: originalPrompt };
+          }
+          return undefined;
+        })
+        .filter(p => p !== undefined) as MappedPromptOption[];
     }
   }
 
   // Function to update $settings.activePromptChain when Multiselect changes
-  // The event detail from svelte-multiselect usually gives the full selected objects
-  const handleMultiselectChange = (event: CustomEvent<{items: DisplayablePrompt[]}>) => {
-    const newSelectedPromptObjects = event.detail.items || [];
+  const handleMultiselectChange = (event: CustomEvent<{items: MappedPromptOption[]}>) => {
+    const newSelectedMappedOptions = event.detail.items || [];
     settings.update(s => ({
       ...s,
-      activePromptChain: newSelectedPromptObjects.map(p => p.id)
+      activePromptChain: newSelectedMappedOptions.map(p => p.value) // Use p.value which is the ID
     }));
   };
 
@@ -200,7 +177,7 @@
             template: p!.template!,
             temperature: p?.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
           }));
-        prompts.set(migratedPrompts as EnhancementPrompt[]); // Ensure it's EnhancementPrompt[]
+        prompts.set(migratedPrompts as StoreEnhancementPrompt[]); // Ensure it's StoreEnhancementPrompt[]
       } else {
         prompts.set([]);
       }
@@ -238,7 +215,7 @@
       alert("Please provide both a name and a template for the new prompt.");
       return;
     }
-    const newPrompt: EnhancementPrompt = {
+    const newPrompt: StoreEnhancementPrompt = {
       id: uuidv4(),
       name: newPromptName.trim(),
       template: newPromptTemplate.trim(),
@@ -367,7 +344,7 @@
     }
 
     // currentPrompt here is guaranteed to be an EnhancementPrompt (custom)
-    const updatedPrompt: EnhancementPrompt = {
+    const updatedPrompt: StoreEnhancementPrompt = {
       id: currentPrompt.id, // Keep original ID
       name: editPromptName.trim(),
       template: editPromptTemplate.trim(),
@@ -389,8 +366,6 @@
       alert("Failed to save the updated prompt.");
     }
   };
-
-  // Removed handleChainSort and handleAddAvailableToSort functions
 </script>
 
 <div class="p-4 space-y-6">
@@ -415,7 +390,7 @@
         <div class="form-control">
           <Multiselect
             options={$allDisplayablePrompts.map(p => ({ value: p.id, label: p.name, original: p }))}
-            bind:selected={selectedPromptObjects}
+            bind:selected={selectedMappedOptions}
             on:change={handleMultiselectChange}
             placeholder="Select prompts for the chain..."
             multiple={true}
@@ -426,7 +401,7 @@
             labelField="label"
             orderable={true}
           />
-           {#if selectedPromptObjects.length === 0}
+           {#if selectedMappedOptions.length === 0}
             <p class="text-xs text-warning-content mt-1">
               Warning: No prompts selected. Enhancement will use the default two-step chain.
             </p>
