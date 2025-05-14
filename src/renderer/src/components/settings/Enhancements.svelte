@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { v4 as uuidv4 } from "uuid";
   import { writable, get, derived } from "svelte/store";
-  import { dndzone } from "svelte-dnd-action";
+  import Multiselect from "svelte-multiselect";
 
   interface EnhancementSettings {
     enabled: boolean;
@@ -88,63 +88,59 @@
   let editPromptTemplate = "";
   let editPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
 
-  const dndOptions = {
-    // items: [] as DisplayablePrompt[], // Removed to prevent overriding dndzone's items
-    flipDurationMs: 200,
-  };
+  // const dndOptions = { ... }; // Removed
   // let defaultPromptContent = ""; // Removed
 
-  const activeChainPrompts = derived(
-    [settings, prompts, systemPromptDetailsCache],
-    ([$settings, $prompts, $systemPromptDetailsCache]) => {
-      if (!$settings || !$prompts || !$systemPromptDetailsCache) return [];
+  // Removed activeChainPrompts and availablePrompts derived stores
 
-      const getPromptDetails = (id: string): DisplayablePrompt | null => {
-        if (SYSTEM_DEFAULT_PROMPT_IDS.has(id)) {
-          return $systemPromptDetailsCache[id] || null;
-        }
-        const customPrompt = $prompts.find((p) => p.id === id);
-        return customPrompt
-          ? {
-              ...customPrompt,
-              temperature: customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
-            }
-          : null;
-      };
-
-      return $settings.activePromptChain
-        .map((id) => getPromptDetails(id))
-        .filter((p): p is DisplayablePrompt => p !== null);
-    },
-  );
-
-  const availablePrompts = derived(
-    [settings, prompts, systemPromptDetailsCache, activeChainPrompts],
-    ([$settings, $prompts, $systemPromptDetailsCache, $activeChainPrompts]) => {
-      if (!$settings || !$prompts || !$systemPromptDetailsCache || !$activeChainPrompts) return [];
-
-      const activeIds = new Set($settings.activePromptChain);
-      const allPromptsMap = new Map<string, DisplayablePrompt>();
-
-      // Add system defaults if not active and available in cache
-      SYSTEM_DEFAULT_PROMPT_IDS.forEach(id => {
-        if (!activeIds.has(id) && $systemPromptDetailsCache[id]) {
-          allPromptsMap.set(id, $systemPromptDetailsCache[id]);
+  // Create a new derived store for all prompts, suitable for Multiselect and general listing
+  const allDisplayablePrompts = derived(
+    [prompts, systemPromptDetailsCache],
+    ([$customPrompts, $systemPromptsCache]) => {
+      const systemDefaults = Array.from(SYSTEM_DEFAULT_PROMPT_IDS)
+        .map(id => $systemPromptsCache[id])
+        .filter(p => p) as SystemPrompt[];
+      
+      const allPrompts: DisplayablePrompt[] = [...systemDefaults, ...$customPrompts.map(p => ({
+        ...p,
+        temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE
+      }))];
+      
+      // Ensure unique prompts by ID, prioritizing system defaults if IDs were to clash (unlikely)
+      const uniquePrompts = new Map<string, DisplayablePrompt>();
+      allPrompts.forEach(p => {
+        if (!uniquePrompts.has(p.id)) {
+          uniquePrompts.set(p.id, p);
         }
       });
-
-      // Add custom prompts if not active
-      $prompts.forEach((p) => {
-        if (!activeIds.has(p.id)) {
-          allPromptsMap.set(p.id, {
-            ...p,
-            temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
-          });
-        }
-      });
-      return Array.from(allPromptsMap.values());
-    },
+      return Array.from(uniquePrompts.values());
+    }
   );
+  
+  // This will hold the prompt *objects* selected in the Multiselect
+  // It needs to be initialized based on the IDs in $settings.activePromptChain
+  let selectedPromptObjects: DisplayablePrompt[] = [];
+
+  // Reactive statement to update selectedPromptObjects when $settings.activePromptChain or $allDisplayablePrompts changes
+  $: {
+    if ($settings && $allDisplayablePrompts) {
+      const currentActiveChainIds = $settings.activePromptChain;
+      selectedPromptObjects = currentActiveChainIds
+        .map(id => $allDisplayablePrompts.find(p => p.id === id))
+        .filter(p => p !== undefined) as DisplayablePrompt[];
+    }
+  }
+
+  // Function to update $settings.activePromptChain when Multiselect changes
+  // The event detail from svelte-multiselect usually gives the full selected objects
+  const handleMultiselectChange = (event: CustomEvent<{items: DisplayablePrompt[]}>) => {
+    const newSelectedPromptObjects = event.detail.items || [];
+    settings.update(s => ({
+      ...s,
+      activePromptChain: newSelectedPromptObjects.map(p => p.id)
+    }));
+  };
+
 
   onMount(async () => {
     try {
@@ -394,22 +390,7 @@
     }
   };
 
-  const handleChainSort = (
-    e: CustomEvent<{ items: DisplayablePrompt[] }>,
-  ) => {
-    const newChainOrder = e.detail.items.map((item) => item.id);
-    settings.update((s) => ({ ...s, activePromptChain: newChainOrder }));
-  };
-
-  const handleAddAvailableToSort = (
-    e: CustomEvent<{ items: DisplayablePrompt[] }>,
-  ) => {
-    // This dndzone is for items being dragged *out* of available and *into* active.
-    // The items in e.detail.items are those remaining in the "Available Prompts" list.
-    // We don't need to do anything with this event for now, as the activeChainPrompts
-    // will be updated by its own dndzone's finalize event.
-    // console.log("Item considered/finalized in available:", e.detail.items);
-  };
+  // Removed handleChainSort and handleAddAvailableToSort functions
 </script>
 
 <div class="p-4 space-y-6">
@@ -428,125 +409,70 @@
         <!-- ... existing context variables ... -->
 
         <div class="divider pt-4">Enhancement Prompt Chain</div>
-        <p class="text-sm opacity-70 -mt-4 mb-4">
-          Drag prompts between "Available" and "Active Chain". Prompts in the
-          chain run sequentially top-to-bottom.
+        <p class="text-sm opacity-70 -mt-4 mb-2">
+          Select and order the prompts to run in sequence.
         </p>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <section>
-            <h3 class="font-medium mb-2">Active Chain</h3>
-            <div
-              class="border border-base-300 rounded-md p-2 min-h-24 space-y-2 bg-base-200"
-              use:dndzone={{ items: $activeChainPrompts, type: 'prompt', ...dndOptions }}
-              on:consider={handleChainSort}
-              on:finalize={handleChainSort}
-            >
-              {#each $activeChainPrompts as prompt, i (prompt.id)}
-                <div
-                  class="p-2 bg-base-100 rounded shadow-sm flex items-center gap-2 cursor-grab active:cursor-grabbing"
-                >
-                  <span class="font-mono text-xs opacity-50 w-4 text-center"
-                    >{i + 1}</span
-                  >
-                  <span class="flex-1 truncate" title={prompt.name}
-                    >{prompt.name}</span
-                  >
-                  <span class="text-xs opacity-60"
-                    >T: {prompt.temperature.toFixed(1)}</span
-                  >
-                  <button
-                    class="btn btn-xs btn-ghost"
-                    title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
-                    aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
-                    on:click|stopPropagation|preventDefault={() => openPromptModal(prompt.id)}
-                  >
-                    {#if SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
-                      <i class="ri-eye-line"></i>
-                    {:else}
-                      <i class="ri-pencil-line"></i>
-                    {/if}
-                  </button>
-                  {#if $activeChainPrompts.length > 1 || !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
-                    <button
-                      class="btn btn-xs btn-ghost text-warning"
-                      title="Remove from Chain"
-                      aria-label="Remove from Chain"
-                      on:click|stopPropagation|preventDefault={() => {
-                        const newChain = $activeChainPrompts
-                          .filter((p) => p.id !== prompt.id)
-                          .map((p) => p.id);
-                        if (newChain.length === 0) {
-                            newChain.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
-                        }
-                        settings.update((s) => ({
-                          ...s,
-                          activePromptChain: newChain,
-                        }));
-                      }}
-                    >
-                      <i class="ri-arrow-go-back-line"></i>
-                    </button>
-                  {/if}
-                </div>
-              {:else}
-                <p class="text-sm text-center opacity-60 py-4">
-                  Drag available prompts here to activate.
-                </p>
-              {/each}
-            </div>
-          </section>
-
-          <section>
-            <h3 class="font-medium mb-2">Available Prompts</h3>
-            <div
-              class="border border-base-300 rounded-md p-2 min-h-24 space-y-2 bg-base-200"
-              use:dndzone={{ items: $availablePrompts, type: 'prompt', ...dndOptions }}
-              on:consider={handleAddAvailableToSort}
-              on:finalize={handleAddAvailableToSort}
-            >
-              {#each $availablePrompts as prompt (prompt.id)}
-                <div
-                  class="p-2 bg-base-100 rounded shadow-sm flex items-center gap-2 cursor-grab active:cursor-grabbing"
-                >
-                  <span class="flex-1 truncate" title={prompt.name}
-                    >{prompt.name}</span
-                  >
-                  <span class="text-xs opacity-60"
-                    >T: {prompt.temperature.toFixed(1)}</span
-                  >
-                  <button
-                    class="btn btn-xs btn-ghost"
-                    title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
-                    aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "Edit Prompt"}
-                    on:click|stopPropagation|preventDefault={() => openPromptModal(prompt.id)}
-                  >
-                    {#if SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
-                      <i class="ri-eye-line"></i>
-                    {:else}
-                      <i class="ri-pencil-line"></i>
-                    {/if}
-                  </button>
-                  {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
-                    <button
-                      class="btn btn-xs btn-ghost text-error"
-                      title="Delete Prompt Permanently"
-                      aria-label="Delete Prompt Permanently"
-                      on:click|stopPropagation|preventDefault={() => deletePrompt(prompt.id)}
-                    >
-                      <i class="ri-delete-bin-line"></i>
-                    </button>
-                  {/if}
-                </div>
-              {:else}
-                <p class="text-sm text-center opacity-60 py-4">
-                  No other prompts available.
-                </p>
-              {/each}
-            </div>
-          </section>
+        <div class="form-control">
+          <Multiselect
+            options={$allDisplayablePrompts.map(p => ({ value: p.id, label: p.name, original: p }))}
+            bind:selected={selectedPromptObjects}
+            on:change={handleMultiselectChange}
+            placeholder="Select prompts for the chain..."
+            multiple={true}
+            sortSelected={false}
+            closeOnSelect={false}
+            clearOnSelect={false}
+            idField="value"
+            labelField="label"
+            orderable={true}
+          />
+           {#if selectedPromptObjects.length === 0}
+            <p class="text-xs text-warning-content mt-1">
+              Warning: No prompts selected. Enhancement will use the default two-step chain.
+            </p>
+          {/if}
         </div>
 
+        <div class="divider pt-6">Manage Prompts</div>
+        <div class="space-y-2">
+          {#each $allDisplayablePrompts as prompt (prompt.id)}
+            <div class="p-2 bg-base-200 rounded shadow-sm flex items-center gap-2">
+              <span class="flex-1 truncate" title={prompt.name}>
+                {prompt.name}
+                {#if SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
+                  <span class="badge badge-xs badge-outline ml-2">System</span>
+                {/if}
+              </span>
+              <span class="text-xs opacity-60">T: {prompt.temperature.toFixed(1)}</span>
+              <button
+                class="btn btn-xs btn-ghost"
+                title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "View/Edit Prompt"}
+                aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "View/Edit Prompt"}
+                on:click={() => openPromptModal(prompt.id)}
+              >
+                <i class="ri-eye-line"></i>
+                {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
+                  <span class="sr-only">/</span><i class="ri-pencil-line ml-1"></i>
+                {/if}
+              </button>
+              {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
+                <button
+                  class="btn btn-xs btn-ghost text-error"
+                  title="Delete Prompt Permanently"
+                  aria-label="Delete Prompt Permanently"
+                  on:click={() => deletePrompt(prompt.id)}
+                >
+                  <i class="ri-delete-bin-line"></i>
+                </button>
+              {/if}
+            </div>
+          {:else}
+            <p class="text-sm text-center opacity-60 py-4">
+              No prompts defined. Add a custom prompt or ensure system defaults are loaded.
+            </p>
+          {/each}
+        </div>
+        
         <div class="mt-6">
           {#if showAddPrompt}
             <div class="p-4 border border-base-300 rounded-md space-y-3">

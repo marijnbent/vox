@@ -33,6 +33,7 @@
     "nodejs-whisper": "^0.2.6",
     "openai": "^4.93.0",
     "remixicon": "^4.6.0",
+    "svelte-multiselect": "^11.0.0-rc.1",
     "tailwindcss": "^4.1.3",
     "uuid": "^11.1.0"
   },
