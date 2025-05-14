@@ -46,30 +46,25 @@
   });
 
   let isLoading = true;
-  const prompts = writable<StoreEnhancementPrompt[]>([]); // Stores only custom prompts
-  const systemPromptDetailsCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
-
-  let newPromptName = "";
-  let newPromptTemplate = "";
-  let newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-  let showAddPrompt = false;
+  const customPrompts = writable<StoreEnhancementPrompt[]>([]); // Stores only custom prompts
+  const systemPromptCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
 
   // Create a new derived store for all prompts, suitable for Multiselect and general listing
-  const allDisplayablePrompts = derived(
-    [prompts, systemPromptDetailsCache],
+  const allPrompts = derived(
+    [customPrompts, systemPromptCache],
     ([$customPrompts, $systemPromptsCache]) => {
       const systemDefaults = Array.from(SYSTEM_DEFAULT_PROMPT_IDS)
         .map(id => $systemPromptsCache[id])
         .filter(p => p) as SystemPrompt[];
       
-      const allPrompts: DisplayablePrompt[] = [...systemDefaults, ...$customPrompts.map(p => ({
+      const all: DisplayablePrompt[] = [...systemDefaults, ...$customPrompts.map(p => ({
         ...p,
         temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE
       }))];
       
       // Ensure unique prompts by ID, prioritizing system defaults if IDs were to clash (unlikely)
       const uniquePrompts = new Map<string, DisplayablePrompt>();
-      allPrompts.forEach(p => {
+      all.forEach(p => {
         if (!uniquePrompts.has(p.id)) {
           uniquePrompts.set(p.id, p);
         }
@@ -88,13 +83,13 @@
   // This will hold the MappedPromptOption objects selected in the Multiselect
   let selectedMappedOptions: MappedPromptOption[] = [];
 
-  // Reactive statement to update selectedMappedOptions when $settings.activePromptChain or $allDisplayablePrompts changes
+  // Reactive statement to update selectedMappedOptions when $settings.activePromptChain or $allPrompts changes
   $: {
-    if ($settings && $allDisplayablePrompts) {
+    if ($settings && $allPrompts) {
       const currentActiveChainIds = $settings.activePromptChain;
       selectedMappedOptions = currentActiveChainIds
         .map(id => {
-          const originalPrompt = $allDisplayablePrompts.find(p => p.id === id);
+          const originalPrompt = $allPrompts.find(p => p.id === id);
           if (originalPrompt) {
             return { value: originalPrompt.id, label: originalPrompt.name, original: originalPrompt };
           }
@@ -124,13 +119,13 @@
     let foundPrompt: DisplayablePrompt | null = null;
     let effectiveMode: "view" | "edit" = "edit";
     if (SYSTEM_DEFAULT_PROMPT_IDS.has(promptId)) {
-      const details = get(systemPromptDetailsCache)[promptId];
+      const details = get(systemPromptCache)[promptId];
       if (details) {
         foundPrompt = details as SystemPrompt;
         effectiveMode = "view";
       }
     } else {
-      const customPrompt = get(prompts).find((p) => p.id === promptId);
+      const customPrompt = get(customPrompts).find((p) => p.id === promptId);
       if (customPrompt) {
         foundPrompt = {
           ...customPrompt,
@@ -161,11 +156,11 @@
         template: template.trim(),
         temperature,
       };
-      const currentPrompts = get(prompts);
+      const currentPrompts = get(customPrompts);
       const updatedPrompts = [...currentPrompts, newPrompt];
       try {
         await window.api.setStoreValue("enhancementPrompts", updatedPrompts);
-        prompts.set(updatedPrompts);
+        customPrompts.set(updatedPrompts);
         showPromptModal = false;
       } catch (error) {
         window.api.log("error", "Failed to save new prompt:", error);
@@ -179,13 +174,13 @@
         template: template.trim(),
         temperature,
       };
-      const currentCustomPrompts = get(prompts);
+      const currentCustomPrompts = get(customPrompts);
       const updatedCustomPrompts = currentCustomPrompts.map((p) =>
         p.id === updatedPrompt.id ? updatedPrompt : p,
       );
       try {
         await window.api.setStoreValue("enhancementPrompts", updatedCustomPrompts);
-        prompts.set(updatedCustomPrompts);
+        customPrompts.set(updatedCustomPrompts);
         showPromptModal = false;
       } catch (error) {
         window.api.log("error", "Failed to save updated prompt:", error);
@@ -213,10 +208,10 @@
           ...defaultPromptDetailPromises
         ]);
 
-      // Populate systemPromptDetailsCache
+      // Populate systemPromptCache
       fetchedDefaultDetails.forEach(details => {
         if (details) {
-          systemPromptDetailsCache.update(cache => ({ ...cache, [details.id]: details as SystemPrompt }));
+          systemPromptCache.update(cache => ({ ...cache, [details.id]: details as SystemPrompt }));
         }
       });
 
@@ -252,13 +247,13 @@
             template: p!.template!,
             temperature: p?.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
           }));
-        prompts.set(migratedPrompts as StoreEnhancementPrompt[]); // Ensure it's StoreEnhancementPrompt[]
+        customPrompts.set(migratedPrompts as StoreEnhancementPrompt[]); // Ensure it's StoreEnhancementPrompt[]
       } else {
-        prompts.set([]);
+        customPrompts.set([]);
       }
     } catch (error) {
       window.api.log("error", "Failed to load enhancement settings:", error);
-      prompts.set([]);
+      customPrompts.set([]);
     } finally {
       isLoading = false;
     }
@@ -285,33 +280,6 @@
     }, 500);
   };
 
-  const addPrompt = async () => {
-    if (!newPromptName.trim() || !newPromptTemplate.trim()) {
-      alert("Please provide both a name and a template for the new prompt.");
-      return;
-    }
-    const newPrompt: StoreEnhancementPrompt = {
-      id: uuidv4(),
-      name: newPromptName.trim(),
-      template: newPromptTemplate.trim(),
-      temperature: newPromptTemperature, // This is EnhancementPrompt
-    };
-    const currentPrompts = get(prompts);
-    const updatedPrompts = [...currentPrompts, newPrompt];
-    try {
-      await window.api.setStoreValue("enhancementPrompts", updatedPrompts);
-      prompts.set(updatedPrompts);
-      newPromptName = "";
-      newPromptTemplate = "";
-      newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-      showAddPrompt = false;
-      window.api.log("info", `Added new enhancement prompt: ${newPrompt.name}`);
-    } catch (error) {
-      window.api.log("error", "Failed to save new prompt:", error);
-      alert("Failed to save the new prompt.");
-    }
-  };
-
   const deletePrompt = async (idToDelete: string) => {
     if (SYSTEM_DEFAULT_PROMPT_IDS.has(idToDelete)) {
       window.api.log("warn", `Attempted to delete system default prompt ID: ${idToDelete}. This is not allowed.`);
@@ -324,7 +292,7 @@
     )
       return;
 
-    const currentPrompts = get(prompts);
+    const currentPrompts = get(customPrompts);
     const updatedPrompts = currentPrompts.filter((p) => p.id !== idToDelete);
     const currentSettings = get(settings);
     const updatedChain = currentSettings.activePromptChain.filter(
@@ -345,7 +313,7 @@
         }),
       ]);
 
-      prompts.set(updatedPrompts);
+      customPrompts.set(updatedPrompts);
       settings.update((s) => ({ ...s, activePromptChain: updatedChain }));
 
       window.api.log(
@@ -380,7 +348,7 @@
         </p>
         <div class="form-control">
           <Multiselect
-            options={$allDisplayablePrompts.map(p => ({ value: p.id, label: p.name, original: p }))}
+            options={$allPrompts.map(p => ({ value: p.id, label: p.name, original: p }))}
             bind:selected={selectedMappedOptions}
             on:change={handleMultiselectChange}
             placeholder="Select prompts for the chain..."
@@ -401,7 +369,7 @@
 
         <div class="divider pt-6">Manage Prompts</div>
         <div class="space-y-2">
-          {#each $allDisplayablePrompts as prompt (prompt.id)}
+          {#each $allPrompts as prompt (prompt.id)}
             <div class="p-2 bg-base-200 rounded shadow-sm flex items-center gap-2">
               <span class="flex-1 truncate" title={prompt.name}>
                 {prompt.name}
@@ -437,97 +405,6 @@
               No prompts defined. Add a custom prompt or ensure system defaults are loaded.
             </p>
           {/each}
-        </div>
-        
-        <div class="mt-6">
-          {#if showAddPrompt}
-            <div class="p-4 border border-base-300 rounded-md space-y-3">
-              <h4 class="font-medium">Add New Prompt</h4>
-              <div class="form-control">
-                <label class="label py-1" for="new-prompt-name"
-                  ><span class="label-text">Prompt Name:</span></label
-                >
-                <input
-                  id="new-prompt-name"
-                  type="text"
-                  placeholder="e.g., Formal Report Style"
-                  class="input input-bordered input-sm w-full"
-                  bind:value={newPromptName}
-                />
-              </div>
-              <div class="form-control">
-                <label class="label py-1" for="new-prompt-template"
-                  ><span class="label-text">Prompt Template:</span></label
-                >
-                <textarea
-                  id="new-prompt-template"
-                  class="textarea textarea-bordered w-full"
-                  rows="4"
-                  placeholder="Enter your prompt. Use {'{{transcription}}'} or output of previous prompt."
-                  bind:value={newPromptTemplate}
-                ></textarea>
-                <span class="pt-2 block-inline text-sm"
-                  >Use <a
-                    target="_blank"
-                    class="underline"
-                    href="https://mustache.github.io/mustache.5.html"
-                    >mustache templating</a
-                  >. Variables:
-                  <code class="kbd kbd-xs h-auto">{"{{transcription}}"}</code>
-                  (for first prompt),
-                  <code class="kbd kbd-xs h-auto">{"{{previous_output}}"}</code>
-                  (for subsequent prompts),
-                  <code class="kbd kbd-xs h-auto">{"{{dictionary_words}}"}</code
-                  >,
-                  <code class="kbd kbd-xs h-auto">{"{{context_screen}}"}</code>,
-                  etc.</span
-                >
-              </div>
-              <div class="form-control">
-                <label class="label" for="new-prompt-temperature">
-                  <span class="label-text">Temperature:</span>
-                  <span class="label-text-alt"
-                    >{newPromptTemperature.toFixed(1)}</span
-                  >
-                </label>
-                <input
-                  id="new-prompt-temperature"
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  bind:value={newPromptTemperature}
-                  class="range range-primary range-sm"
-                />
-                <div class="w-full flex justify-between text-xs px-2 pt-1">
-                  <span>Precise</span><span>Balanced</span><span>Creative</span>
-                </div>
-              </div>
-              <div class="flex justify-end gap-2 pt-2">
-                <button
-                  class="btn btn-sm btn-ghost"
-                  on:click={() => {
-                    showAddPrompt = false;
-                    newPromptName = "";
-                    newPromptTemplate = "";
-                    newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-                  }}>Cancel</button
-                >
-                <button class="btn btn-sm btn-primary" on:click={addPrompt}
-                  >Add Prompt</button
-                >
-              </div>
-            </div>
-          {:else}
-            <button
-              class="btn btn-sm btn-outline"
-              on:click={() => {
-                showAddPrompt = true;
-              }}
-            >
-              <i class="ri-add-line"></i> Add Custom Prompt
-            </button>
-          {/if}
         </div>
       {/if}
     </div>
