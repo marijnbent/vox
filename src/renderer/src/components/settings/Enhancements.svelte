@@ -3,7 +3,8 @@
   import { v4 as uuidv4 } from "uuid";
   import { writable, get, derived } from "svelte/store";
   import Multiselect from "svelte-multiselect";
-import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt } from "../../../../main/store";
+  import PromptModal from "./PromptModal.svelte";
+  import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt } from "../../../../main/store";
 
   // Interface for the new system default prompts (fetched from backend)
   interface SystemPrompt {
@@ -52,12 +53,6 @@ import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt }
   let newPromptTemplate = "";
   let newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
   let showAddPrompt = false;
-  let showPromptModal = false;
-  let modalMode: "view" | "edit" | "add" = "add";
-  let currentPrompt: DisplayablePrompt | null = null;
-  let editPromptName = "";
-  let editPromptTemplate = "";
-  let editPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
 
   // Create a new derived store for all prompts, suitable for Multiselect and general listing
   const allDisplayablePrompts = derived(
@@ -118,6 +113,86 @@ import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt }
     }));
   };
 
+  // Helper to open modal for view/edit/add
+  function openPromptModalWrapper(promptId?: string) {
+    if (!promptId) {
+      modalMode = "add";
+      currentPrompt = null;
+      showPromptModal = true;
+      return;
+    }
+    let foundPrompt: DisplayablePrompt | null = null;
+    let effectiveMode: "view" | "edit" = "edit";
+    if (SYSTEM_DEFAULT_PROMPT_IDS.has(promptId)) {
+      const details = get(systemPromptDetailsCache)[promptId];
+      if (details) {
+        foundPrompt = details as SystemPrompt;
+        effectiveMode = "view";
+      }
+    } else {
+      const customPrompt = get(prompts).find((p) => p.id === promptId);
+      if (customPrompt) {
+        foundPrompt = {
+          ...customPrompt,
+          temperature: customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
+        };
+        effectiveMode = "edit";
+      }
+    }
+    if (foundPrompt) {
+      currentPrompt = foundPrompt;
+      modalMode = effectiveMode;
+      showPromptModal = true;
+    }
+  }
+
+  function handlePromptModalClose() {
+    showPromptModal = false;
+    currentPrompt = null;
+  }
+
+  async function handlePromptModalSave(e: CustomEvent<{ name: string; template: string; temperature: number }>) {
+    const { name, template, temperature } = e.detail;
+    if (modalMode === "add") {
+      // Add new prompt
+      const newPrompt: StoreEnhancementPrompt = {
+        id: uuidv4(),
+        name: name.trim(),
+        template: template.trim(),
+        temperature,
+      };
+      const currentPrompts = get(prompts);
+      const updatedPrompts = [...currentPrompts, newPrompt];
+      try {
+        await window.api.setStoreValue("enhancementPrompts", updatedPrompts);
+        prompts.set(updatedPrompts);
+        showPromptModal = false;
+      } catch (error) {
+        window.api.log("error", "Failed to save new prompt:", error);
+        alert("Failed to save the new prompt.");
+      }
+    } else if (modalMode === "edit" && currentPrompt && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)) {
+      // Edit existing prompt
+      const updatedPrompt: StoreEnhancementPrompt = {
+        id: currentPrompt.id,
+        name: name.trim(),
+        template: template.trim(),
+        temperature,
+      };
+      const currentCustomPrompts = get(prompts);
+      const updatedCustomPrompts = currentCustomPrompts.map((p) =>
+        p.id === updatedPrompt.id ? updatedPrompt : p,
+      );
+      try {
+        await window.api.setStoreValue("enhancementPrompts", updatedCustomPrompts);
+        prompts.set(updatedCustomPrompts);
+        showPromptModal = false;
+      } catch (error) {
+        window.api.log("error", "Failed to save updated prompt:", error);
+        alert("Failed to save the updated prompt.");
+      }
+    }
+  }
 
   onMount(async () => {
     try {
@@ -282,90 +357,6 @@ import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt }
       alert("Failed to delete the prompt.");
     }
   };
-
-  const closeModal = () => {
-    showPromptModal = false;
-    currentPrompt = null;
-    editPromptName = "";
-    editPromptTemplate = "";
-  };
-
-  const openPromptModal = async (promptId: string) => {
-    let foundPrompt: DisplayablePrompt | null = null;
-    let effectiveMode: "view" | "edit" = "edit";
-
-    if (SYSTEM_DEFAULT_PROMPT_IDS.has(promptId)) {
-      const details = get(systemPromptDetailsCache)[promptId] || await window.api.getDefaultPromptDetails(promptId);
-      if (details) {
-        // Ensure details are in cache if fetched now
-        if (!get(systemPromptDetailsCache)[promptId] && details) {
-            systemPromptDetailsCache.update(cache => ({...cache, [promptId]: details as SystemPrompt}));
-        }
-        foundPrompt = details as SystemPrompt;
-        effectiveMode = "view"; // System defaults are always view-only
-      } else {
-        window.api.log("error", `Default prompt details not found for ID: ${promptId}`);
-        alert(`Details for default prompt "${promptId}" not available.`);
-        return;
-      }
-    } else {
-      // Custom prompt
-      const customPrompt = get(prompts).find((p) => p.id === promptId);
-      if (customPrompt) {
-        foundPrompt = {
-          ...customPrompt,
-          temperature: customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
-        };
-        effectiveMode = "edit";
-      }
-    }
-
-    if (foundPrompt) {
-      currentPrompt = foundPrompt;
-      modalMode = effectiveMode;
-      editPromptName = foundPrompt.name;
-      editPromptTemplate = foundPrompt.template;
-      editPromptTemperature = foundPrompt.temperature;
-      showPromptModal = true;
-    } else {
-      window.api.log("error", `Prompt not found for ID: ${promptId}`);
-    }
-  };
-
-  const saveEditedPrompt = async () => {
-    if (!currentPrompt || SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)) {
-      // Should not happen if UI is correct, but as a safeguard
-      window.api.log("warn", "Attempted to save a system default prompt or no current prompt.");
-      return;
-    }
-    if (!editPromptName.trim() || !editPromptTemplate.trim()) {
-      alert("Prompt name and template cannot be empty.");
-      return;
-    }
-
-    // currentPrompt here is guaranteed to be an EnhancementPrompt (custom)
-    const updatedPrompt: StoreEnhancementPrompt = {
-      id: currentPrompt.id, // Keep original ID
-      name: editPromptName.trim(),
-      template: editPromptTemplate.trim(),
-      temperature: editPromptTemperature,
-    };
-
-    const currentCustomPrompts = get(prompts);
-    const updatedCustomPrompts = currentCustomPrompts.map((p) =>
-      p.id === updatedPrompt.id ? updatedPrompt : p,
-    );
-
-    try {
-      await window.api.setStoreValue("enhancementPrompts", updatedCustomPrompts);
-      prompts.set(updatedCustomPrompts);
-      window.api.log("info", `Updated prompt: ${updatedPrompt.name}`);
-      closeModal();
-    } catch (error) {
-      window.api.log("error", "Failed to save updated prompt:", error);
-      alert("Failed to save the updated prompt.");
-    }
-  };
 </script>
 
 <div class="p-4 space-y-6">
@@ -423,7 +414,7 @@ import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt }
                 class="btn btn-xs btn-ghost"
                 title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "View/Edit Prompt"}
                 aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "View/Edit Prompt"}
-                on:click={() => openPromptModal(prompt.id)}
+                on:click={() => openPromptModalWrapper(prompt.id)}
               >
                 <i class="ri-eye-line"></i>
                 {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
@@ -543,112 +534,13 @@ import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt }
   {/if}
 </div>
 
-{#if showPromptModal && currentPrompt}
-  <dialog id="prompt_modal" class="modal modal-open">
-    <div class="modal-box w-11/12 max-w-2xl">
-      <h3 class="font-bold text-lg mb-4">
-        {#if modalMode === "view"}
-          View Prompt: {currentPrompt.name}
-        {:else if modalMode === "edit"}
-          Edit Prompt: {currentPrompt.name}
-        {/if}
-      </h3>
-
-      {#if modalMode === "view"}
-        <div class="space-y-4">
-          <div>
-            <div class="label">
-              <span class="label-text font-semibold">Name:</span>
-            </div>
-            <p class="p-2 bg-base-200 rounded">{currentPrompt.name}</p>
-          </div>
-          <div>
-            <div class="label">
-              <span class="label-text font-semibold">Template:</span>
-            </div>
-            <pre
-              class="p-2 bg-base-200 rounded text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">{currentPrompt.template}</pre>
-          </div>
-          <div>
-            <div class="label">
-              <span class="label-text font-semibold">Temperature:</span>
-            </div>
-            <p class="p-2 bg-base-200 rounded">
-              {currentPrompt.temperature.toFixed(1)}
-            </p>
-          </div>
-        </div>
-      {:else if modalMode === "edit" && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id) }
-        <!-- Edit mode only for non-system prompts -->
-        <div class="space-y-4">
-          <div class="form-control">
-            <label class="label py-1" for="edit-prompt-name"
-              ><span class="label-text">Prompt Name:</span></label
-            >
-            <input
-              id="edit-prompt-name"
-              type="text"
-              class="input input-bordered w-full"
-              bind:value={editPromptName}
-            />
-          </div>
-          <div class="form-control">
-            <label class="label py-1" for="edit-prompt-template"
-              ><span class="label-text">Prompt Template:</span></label
-            >
-            <textarea
-              id="edit-prompt-template"
-              class="textarea textarea-bordered w-full"
-              rows="6"
-              placeholder="Use {'{{transcription}}'} or {'{{previous_output}}'}..."
-              bind:value={editPromptTemplate}
-            ></textarea>
-            <span class="pt-2 block-inline text-sm"
-              >Variables: <code class="kbd kbd-xs h-auto"
-                >{"{{transcription}}"}</code
-              >, <code class="kbd kbd-xs h-auto">{"{{previous_output}}"}</code>,
-              context vars, etc.</span
-            >
-          </div>
-          <div class="form-control">
-            <label class="label" for="edit-prompt-temperature">
-              <span class="label-text">Temperature:</span>
-              <span class="label-text-alt"
-                >{editPromptTemperature.toFixed(1)}</span
-              >
-            </label>
-            <input
-              id="edit-prompt-temperature"
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              bind:value={editPromptTemperature}
-              class="range range-primary range-sm"
-            />
-            <div class="w-full flex justify-between text-xs px-2 pt-1">
-              <span>Precise</span><span>Balanced</span><span>Creative</span>
-            </div>
-          </div>
-        </div>
-      {:else if modalMode === "edit" && SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)}
-         <!-- This case should ideally not be reached if openPromptModal sets mode to "view" for system defaults -->
-        <p class="text-warning">
-          System default prompts cannot be edited.
-        </p>
-      {/if}
-
-      <div class="modal-action mt-6">
-        <button class="btn btn-ghost" on:click={closeModal}>Close</button>
-        {#if modalMode === "edit" && currentPrompt && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)}
-          <button class="btn btn-primary" on:click={saveEditedPrompt}
-            >Save Changes</button
-          >
-        {/if}
-      </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-      <button on:click={closeModal}>close</button>
-    </form>
-  </dialog>
-{/if}
+<!-- Prompt Modal for add/edit/view -->
+<PromptModal
+  show={showPromptModal}
+  mode={modalMode}
+  prompt={currentPrompt}
+  systemDefaultIds={SYSTEM_DEFAULT_PROMPT_IDS}
+  fallbackTemperature={FALLBACK_CUSTOM_PROMPT_TEMPERATURE}
+  on:close={handlePromptModalClose}
+  on:save={handlePromptModalSave}
+/>
