@@ -5,6 +5,7 @@
   import PromptModal from "./PromptModal.svelte";
   import type {
     EnhancementSettings,
+    EnhancementPrompt as StoreEnhancementPrompt,
   } from "../../../../main/store";
   import {
     customPrompts,
@@ -172,17 +173,21 @@
         "error",
         `Unknown multiselect change event detail: ${JSON.stringify(detail)}`,
       );
-      return;
+      return; // Do not update if the event is not understood.
     }
 
+    // Only update the store if the chain has actually changed to prevent unnecessary reactivity.
     if (JSON.stringify(currentChain) !== JSON.stringify(newActiveChainIds)) {
       settings.update((s) => ({
         ...s,
         activePromptChain: newActiveChainIds,
       }));
     }
+    // The reactive block `$: { ... }` (lines 69-101) will derive selectedMappedOptions
+    // from the updated $settings.activePromptChain, which then updates the `selected` prop of the Multiselect.
   };
 
+  // Helper to open modal for view/edit/add
   function openPromptModalWrapper(promptId?: string) {
     if (!promptId) {
       modalMode = "add";
@@ -243,6 +248,7 @@
         showPromptModal = false;
       }
     } catch (error) {
+      // Error is already logged and alerted by the manager
       window.api.log(
         "debug",
         "Prompt save/edit failed at component level, handled by manager.",
@@ -635,6 +641,7 @@
   {/if}
 </div>
 
+<!-- Prompt Modal for add/edit/view -->
 <PromptModal
   show={showPromptModal}
   mode={modalMode}

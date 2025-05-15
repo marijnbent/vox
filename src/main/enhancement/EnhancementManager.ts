@@ -2,10 +2,7 @@ import { EnhancementService } from './EnhancementService';
 import { OpenaiEnhancementService } from './OpenaiEnhancementService';
 import store from '../store';
 import { logger } from '../logger';
-import type { EnhancementSettings } from '../store'; // EnhancementPrompt is not used here anymore
-
-// getDefaultPromptTemplate function removed as it's no longer needed.
-// The OpenaiEnhancementService now handles its own default prompt loading.
+import type { EnhancementSettings } from '../store';
 
 export class EnhancementManager {
   private enhancementService: EnhancementService;
@@ -14,10 +11,6 @@ export class EnhancementManager {
     this.enhancementService = new OpenaiEnhancementService();
     logger.info('Enhancement Manager initialized using OpenaiEnhancementService for all providers.');
   }
-
-  // getActivePromptTemplate method removed.
-  // The OpenaiEnhancementService now manages the prompt chain internally
-  // based on settings.activePromptChain.
 
   public async enhance(text: string): Promise<{ finalText: string; promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }> {
     const settings = store.get('enhancements') as EnhancementSettings;

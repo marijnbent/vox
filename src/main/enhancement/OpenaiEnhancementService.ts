@@ -105,10 +105,32 @@ export class OpenaiEnhancementService implements EnhancementService {
         promptNameMap.set(p.id, p.name);
     });
 
+    logger.info(`Starting enhancement chain with ${activeChainIds.length} prompts.`);
+
+    // build all static context fields once
+    const baseContextData: Record<string, any> = {
+      transcription: initialText
+    };
+
+    if (enhancementSettings.useContextScreen) {
+      baseContextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
+    }
+
+    if (enhancementSettings.useContextInputField) {
+      baseContextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
+    }
+
+    if (enhancementSettings.useContextClipboard) {
+      baseContextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
+    }
+
+    if (enhancementSettings.useDictionaryWordList) {
+      const dictionaryWords = store.get('dictionary.words', []) as string[];
+      baseContextData.dictionary_word_list = dictionaryWords.join(', ');
+    }
+
     let currentText = initialText;
     const promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] = [];
-
-    logger.info(`Starting enhancement chain with ${activeChainIds.length} prompts.`);
 
     for (let i = 0; i < activeChainIds.length; i++) {
         const promptId = activeChainIds[i];
@@ -119,24 +141,15 @@ export class OpenaiEnhancementService implements EnhancementService {
             continue;
         }
 
-        const contextData: { [key: string]: any } = {
-            transcription: initialText,
-            previous_output: i > 0 ? currentText : initialText
-        };
+        if (promptId === DEFAULT_CONTEXTUAL_FORMATTING_ID && !enhancementSettings.useContextInputField) {
+            logger.warn(`Prompt ID "${promptId}" skipped due to context input field settings.`);
+            continue;
+        }
 
-        if (enhancementSettings.useContextScreen) {
-            contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
-        }
-        if (enhancementSettings.useContextInputField) {
-            contextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
-        }
-        if (enhancementSettings.useContextClipboard) {
-            contextData.context_clipboard = "[Clipboard Placeholder - Not Implemented]";
-        }
-        if (enhancementSettings.useDictionaryWordList) {
-            const dictionaryWords = store.get('dictionary.words', []) as string[];
-            contextData.dictionary_word_list = dictionaryWords.join(', ');
-        }
+        const contextData = {
+            ...baseContextData,
+            previous_output: currentText
+        };
 
         const finalPrompt = Mustache.render(promptDetailsEntry.template, contextData);
 
