@@ -174,6 +174,9 @@
             <p class="text-xs opacity-60 mt-1">
               {formatTimestamp(entry.timestamp)}
             </p>
+            {#if entry.enhancedText}
+              <span class="badge badge-outline badge-primary badge-xs">Enhanced</span>
+            {/if}
           </div>
         {/each}
 

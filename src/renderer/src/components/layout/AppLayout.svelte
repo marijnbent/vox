@@ -16,7 +16,7 @@
 </script>
 
 <div class="flex min-h-screen">
-  <aside class="bg-base-200 w-64 h-screen flex flex-col sticky top-0">
+  <aside class="bg-purple-50 w-64 h-screen flex flex-col sticky top-0">
     <div class="px-4 py-6">
       <h1 class="text-2xl font-bold">🎤✨</h1>
     </div>

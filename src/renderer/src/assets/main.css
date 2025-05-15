@@ -11,10 +11,44 @@ textarea,
 }
 @import "tailwindcss";
 
-@plugin "daisyui" {
-  themes: caramellatte --default;
+@plugin "daisyui" {}
+
+@plugin "daisyui/theme" {
+  name: "pastel";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(98.462% 0.001 247.838);
+  --color-base-300: oklch(92.462% 0.001 247.838);
+  --color-base-content: oklch(20% 0 0);
+  --color-primary: oklch(82% 0.119 306.383);
+  --color-primary-content: oklch(43% 0.218 303.724);
+  --color-secondary: oklch(78% 0.115 274.713);
+  --color-secondary-content: oklch(45% 0.24 277.023);
+  --color-accent: oklch(94% 0.129 101.54);
+  --color-accent-content: oklch(55% 0.135 66.442);
+  --color-neutral: oklch(55% 0.046 257.417);
+  --color-neutral-content: oklch(92% 0.013 255.508);
+  --color-info: oklch(86% 0.127 207.078);
+  --color-info-content: oklch(52% 0.105 223.128);
+  --color-success: oklch(79% 0.209 151.711);
+  --color-success-content: oklch(52% 0.154 150.069);
+  --color-warning: oklch(75% 0.183 55.934);
+  --color-warning-content: oklch(47% 0.157 37.304);
+  --color-error: oklch(70% 0.191 22.216);
+  --color-error-content: oklch(44% 0.177 26.899);
+  --radius-selector: 1rem;
+  --radius-field: 2rem;
+  --radius-box: 1rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 2px;
+  --depth: 0;
+  --noise: 0;
 }
 
-:root[data-theme="caramellatte"] {
+
+:root[data-theme="pastel"] {
   background-color: transparent;
 }

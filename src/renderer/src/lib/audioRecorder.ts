@@ -15,7 +15,6 @@ const SOUND_START = 'Tink';
 const SOUND_STOP = 'Submarine';
 const SOUND_CANCEL = 'Basso';
 
-const SILENCE_THRESHOLD = 0.003;
 const DESIRED_AUDIO_BITRATE = 32000;
 
 export function initializeAudioRecorder(): () => void {
@@ -183,12 +182,6 @@ async function startRecording(): Promise<void> {
 
         window.api.log('info', `Audio decoded: Duration=${audioBuffer.duration.toFixed(2)}s, SampleRate=${audioBuffer.sampleRate}Hz`);
 
-        if (isAudioSilent(audioBuffer)) {
-            window.api.log('info', 'Detected silence, skipping transcription. Notifying main process.');
-            window.api.notifySilenceCancellation();
-            throw new Error("Silent audio detected");
-        }
-
          if (cancelRequested) {
             window.api.log('warn', 'Recording cancelled just before sending to main process.');
             throw new Error("Cancelled before sending");
@@ -349,28 +342,6 @@ function getSupportedMimeTypeAndOptions(): MediaRecorderOptions {
     options.audioBitsPerSecond = DESIRED_AUDIO_BITRATE;
 
     return options;
-}
-
-function isAudioSilent(audioBuffer: AudioBuffer): boolean {
-    const channelCount = audioBuffer.numberOfChannels;
-    const threshold = SILENCE_THRESHOLD;
-    let maxAmplitude = 0;
-
-    for (let i = 0; i < channelCount; i++) {
-        const channelData = audioBuffer.getChannelData(i);
-        for (let j = 0; j < channelData.length; j++) {
-            const amplitude = Math.abs(channelData[j]);
-            if (amplitude > maxAmplitude) {
-                 maxAmplitude = amplitude;
-                 if (maxAmplitude > threshold) {
-                     window.api.log('debug', `Detected amplitude ${maxAmplitude.toFixed(4)} > threshold ${threshold}. Not silent.`);
-                     return false;
-                 }
-            }
-        }
-    }
-    window.api.log('debug', `Max detected amplitude: ${maxAmplitude.toFixed(4)} (Threshold: ${threshold}). Silent.`);
-    return maxAmplitude <= threshold;
 }
 
 export function get<T>(store: { subscribe: (cb: (value: T) => void) => () => void }): T {
