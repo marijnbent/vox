@@ -59,32 +59,28 @@
   // This will hold the MappedPromptOption objects selected in the Multiselect
   let selectedMappedOptions: MappedPromptOption[] = [];
 
-  // Reactive statement to update selectedMappedOptions when $settings.activePromptChain or $allPrompts changes
-  // This ensures that selectedMappedOptions always reflects the current state of the active chain
-  // and the available prompts, maintaining the correct order for the Multiselect component.
+  // Create a stable list of options for the Multiselect component.
+  // This helps ensure referential integrity if the component relies on it.
+  let multiselectComponentOptions: MappedPromptOption[] = [];
+  $: multiselectComponentOptions = $allPrompts.map(p => ({ value: p.id, label: p.name, original: p }));
+  
+  // Reactive statement to synchronize `selectedMappedOptions` with `$settings.activePromptChain`
+  // and the `multiselectComponentOptions`. This is crucial for `bind:selected` to work correctly.
   $: {
-    if ($settings && $allPrompts && Array.isArray($settings.activePromptChain)) {
-      const allPromptsMap = new Map($allPrompts.map(p => [p.id, p]));
+    if ($settings && Array.isArray($settings.activePromptChain) && multiselectComponentOptions.length > 0) {
+      const optionsMap = new Map(multiselectComponentOptions.map(opt => [opt.value, opt]));
       const newSelectedOptions: MappedPromptOption[] = [];
-
+      
       for (const id of $settings.activePromptChain) {
-        const originalPrompt = allPromptsMap.get(id);
-        if (originalPrompt) {
-          newSelectedOptions.push({
-            value: originalPrompt.id,
-            label: originalPrompt.name,
-            original: originalPrompt,
-          });
+        const mappedOption = optionsMap.get(id); // Get the option object by reference
+        if (mappedOption) {
+          newSelectedOptions.push(mappedOption);
         } else {
-          // This case should ideally not happen if data is consistent.
-          // It means an ID in activePromptChain doesn't exist in allPrompts.
-          // Consider logging this or handling it, e.g., by filtering out such IDs from activePromptChain.
-          window.api.log("warn", `Prompt ID "${id}" in activePromptChain not found in allPrompts.`);
+          window.api.log("warn", `Prompt ID "${id}" in activePromptChain not found in multiselectComponentOptions.`);
         }
       }
 
-      // Only update if the actual selection has changed to prevent infinite loops or unnecessary updates.
-      // This compares the IDs in order.
+      // Only update if the selection has genuinely changed to avoid reactivity loops.
       if (
         selectedMappedOptions.length !== newSelectedOptions.length ||
         selectedMappedOptions.some((opt, index) => opt.value !== newSelectedOptions[index]?.value)
@@ -92,13 +88,16 @@
         selectedMappedOptions = newSelectedOptions;
       }
     } else if ($settings && $settings.activePromptChain && $settings.activePromptChain.length === 0) {
-      // If the active chain is explicitly empty, clear the selection.
+      // If activePromptChain is empty, ensure selectedMappedOptions is also empty.
       if (selectedMappedOptions.length !== 0) {
         selectedMappedOptions = [];
       }
+    } else if (multiselectComponentOptions.length === 0 && $settings?.activePromptChain?.length > 0) {
+        // If options are not loaded yet but there's an active chain, selection should be empty.
+        if (selectedMappedOptions.length !== 0) {
+            selectedMappedOptions = [];
+        }
     }
-    // If $allPrompts is not yet loaded, selectedMappedOptions will remain as is (likely empty initially),
-    // and will be correctly populated once $allPrompts is available.
   }
 
   // Function to update $settings.activePromptChain when Multiselect changes
@@ -110,8 +109,8 @@
       ...s,
       activePromptChain: newActiveChain
     }));
-    // `selectedMappedOptions` is updated by the `bind:selected` directive.
-    // The reactive block `$: { ... }` will then ensure consistency if $allPrompts changes.
+    // The reactive block `$: { ... }` will derive selectedMappedOptions from the newActiveChain,
+    // which then updates the `selected` prop of the Multiselect.
   };
 
   // Helper to open modal for view/edit/add
@@ -272,18 +271,10 @@
         </p>
         <div class="form-control">
           <Multiselect
-            options={$allPrompts.map(p => ({ value: p.id, label: p.name, original: p }))}
-            bind:selected={selectedMappedOptions}
+            options={multiselectComponentOptions}
+            selected={selectedMappedOptions}
             on:change={handleMultiselectChange}
             placeholder="Select prompts for the chain..."
-            multiple={true}
-            sortSelected={false}
-            closeOnSelect={false}
-            clearOnSelect={false}
-            showClear={false}
-            idField="value"
-            labelField="label"
-            orderable={true}
           />
            {#if selectedMappedOptions.length === 0}
             <p class="text-xs text-warning-content mt-1">

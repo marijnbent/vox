@@ -114,13 +114,13 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('getDefaultPromptDetails', async (_event, id: string) => {
       const DEFAULT_PROMPTS_CONFIG = {
         "default_clean_transcription": {
-          name: "Default Clean Transcription",
+          name: "🛀 Clean Transcription",
           filePath: "resources/prompt-clean-transcription.txt",
           temperature: 0.1,
           fallbackTemplate: "Clean this: {{transcription}}"
         },
         "default_contextual_formatting": {
-          name: "Default Contextual Formatting",
+          name: "🤖 Contextual Formatting",
           filePath: "resources/prompt-contextual-formatting.txt",
           temperature: 1.0,
           fallbackTemplate: "Format this: {{previous_output}}"
