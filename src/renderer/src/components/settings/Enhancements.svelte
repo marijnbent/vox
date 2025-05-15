@@ -60,28 +60,58 @@
   let selectedMappedOptions: MappedPromptOption[] = [];
 
   // Reactive statement to update selectedMappedOptions when $settings.activePromptChain or $allPrompts changes
+  // This ensures that selectedMappedOptions always reflects the current state of the active chain
+  // and the available prompts, maintaining the correct order for the Multiselect component.
   $: {
-    if ($settings && $allPrompts) {
-      const currentActiveChainIds = $settings.activePromptChain;
-      selectedMappedOptions = currentActiveChainIds
-        .map(id => {
-          const originalPrompt = $allPrompts.find(p => p.id === id);
-          if (originalPrompt) {
-            return { value: originalPrompt.id, label: originalPrompt.name, original: originalPrompt };
-          }
-          return undefined;
-        })
-        .filter(p => p !== undefined) as MappedPromptOption[];
+    if ($settings && $allPrompts && Array.isArray($settings.activePromptChain)) {
+      const allPromptsMap = new Map($allPrompts.map(p => [p.id, p]));
+      const newSelectedOptions: MappedPromptOption[] = [];
+
+      for (const id of $settings.activePromptChain) {
+        const originalPrompt = allPromptsMap.get(id);
+        if (originalPrompt) {
+          newSelectedOptions.push({
+            value: originalPrompt.id,
+            label: originalPrompt.name,
+            original: originalPrompt,
+          });
+        } else {
+          // This case should ideally not happen if data is consistent.
+          // It means an ID in activePromptChain doesn't exist in allPrompts.
+          // Consider logging this or handling it, e.g., by filtering out such IDs from activePromptChain.
+          window.api.log("warn", `Prompt ID "${id}" in activePromptChain not found in allPrompts.`);
+        }
+      }
+
+      // Only update if the actual selection has changed to prevent infinite loops or unnecessary updates.
+      // This compares the IDs in order.
+      if (
+        selectedMappedOptions.length !== newSelectedOptions.length ||
+        selectedMappedOptions.some((opt, index) => opt.value !== newSelectedOptions[index]?.value)
+      ) {
+        selectedMappedOptions = newSelectedOptions;
+      }
+    } else if ($settings && $settings.activePromptChain && $settings.activePromptChain.length === 0) {
+      // If the active chain is explicitly empty, clear the selection.
+      if (selectedMappedOptions.length !== 0) {
+        selectedMappedOptions = [];
+      }
     }
+    // If $allPrompts is not yet loaded, selectedMappedOptions will remain as is (likely empty initially),
+    // and will be correctly populated once $allPrompts is available.
   }
 
   // Function to update $settings.activePromptChain when Multiselect changes
   const handleMultiselectChange = (event: CustomEvent<{items: MappedPromptOption[]}>) => {
-    const newSelectedMappedOptions = event.detail.items || [];
+    // The `event.detail.items` from svelte-multiselect contains the current selection
+    // in the order they appear in the component.
+    const newActiveChain = (event.detail.items || []).map(p => p.value);
     settings.update(s => ({
       ...s,
-      activePromptChain: newSelectedMappedOptions.map(p => p.value) // Use p.value which is the ID
+      activePromptChain: newActiveChain
     }));
+    // `selectedMappedOptions` is updated by the `bind:selected` directive.
+    // The reactive block `$: { ... }` will then ensure consistency if $allPrompts changes.
   };
 
   // Helper to open modal for view/edit/add
@@ -250,6 +280,7 @@
             sortSelected={false}
             closeOnSelect={false}
             clearOnSelect={false}
+            showClear={false}
             idField="value"
             labelField="label"
             orderable={true}

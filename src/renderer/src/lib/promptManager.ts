@@ -60,21 +60,24 @@ export async function initializePrompts(settingsStore: ReturnType<typeof writabl
       })
     );
 
-    const [storedPromptsResult, ...fetchedDefaultDetails] =
-      await Promise.all([
-        storedPromptsPromise,
-        ...defaultPromptDetailPromises
-      ]);
+    // Correctly handle Promise.all results
+    const allPromises = [storedPromptsPromise, ...defaultPromptDetailPromises];
+    const results = await Promise.all(allPromises);
+
+    const storedPromptsResult = results[0] as Partial<StoreEnhancementPrompt>[] | undefined;
+    const fetchedDefaultDetails = results.slice(1) as (SystemPrompt | null)[];
+
 
     // Populate systemPromptCache
     fetchedDefaultDetails.forEach(details => {
       if (details) {
-        systemPromptCache.update(cache => ({ ...cache, [details.id]: details as SystemPrompt }));
+        // Ensure details is not null and has an id
+        systemPromptCache.update(cache => ({ ...cache, [(details as SystemPrompt).id]: details as SystemPrompt }));
       }
     });
 
     if (storedPromptsResult) {
-      const migratedPrompts = storedPromptsResult
+      const migratedPrompts = (storedPromptsResult as Partial<StoreEnhancementPrompt>[])
         .filter((p) => p?.id && p.name && p.template) // Basic validation
         .map((p) => ({
           id: p!.id!,
