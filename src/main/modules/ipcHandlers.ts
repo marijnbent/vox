@@ -108,22 +108,19 @@ export function setupIpcHandlers(): void {
         sendToWidget('widget-recorder-started');
     });
 
-    // Removed old getDefaultPromptContent handler
-
-    // New handler for specific default prompt details
     ipcMain.handle('getDefaultPromptDetails', async (_event, id: string) => {
       const DEFAULT_PROMPTS_CONFIG = {
         "default_clean_transcription": {
-          name: "🛀 Clean Transcription",
+          name: "🧽 Clean Transcription",
           filePath: "resources/prompt-clean-transcription.txt",
           temperature: 0.1,
-          fallbackTemplate: "Clean this: {{transcription}}"
+          fallbackTemplate: ""
         },
         "default_contextual_formatting": {
-          name: "🤖 Contextual Formatting",
+          name: "✏️ Input Formatting",
           filePath: "resources/prompt-contextual-formatting.txt",
           temperature: 1.0,
-          fallbackTemplate: "Format this: {{previous_output}}"
+          fallbackTemplate: ""
         }
       };
 

@@ -101,16 +101,62 @@
   }
 
   // Function to update $settings.activePromptChain when Multiselect changes
-  const handleMultiselectChange = (event: CustomEvent<{items: MappedPromptOption[]}>) => {
-    // The `event.detail.items` from svelte-multiselect contains the current selection
-    // in the order they appear in the component.
-    const newActiveChain = (event.detail.items || []).map(p => p.value);
-    settings.update(s => ({
-      ...s,
-      activePromptChain: newActiveChain
-    }));
-    // The reactive block `$: { ... }` will derive selectedMappedOptions from the newActiveChain,
-    // which then updates the `selected` prop of the Multiselect.
+
+  // Define event detail types for clarity, matching svelte-multiselect documentation
+  interface MultiselectChangeEventDetailAdd {
+    type: 'add';
+    option: MappedPromptOption;
+  }
+  interface MultiselectChangeEventDetailRemove {
+    type: 'remove';
+    option: MappedPromptOption;
+  }
+  interface MultiselectChangeEventDetailRemoveAll {
+    type: 'removeAll';
+    options: MappedPromptOption[]; // These are the options that *were* selected
+  }
+
+  type MultiselectChangeEventDetail =
+    | MultiselectChangeEventDetailAdd
+    | MultiselectChangeEventDetailRemove
+    | MultiselectChangeEventDetailRemoveAll;
+
+  const handleMultiselectChange = (event: CustomEvent<MultiselectChangeEventDetail>) => {
+    const detail = event.detail;
+    const currentChain = get(settings).activePromptChain;
+    let newActiveChainIds: string[];
+
+    if (detail.type === 'add') {
+      // Add the new prompt's ID if it's not already in the chain.
+      // svelte-multiselect handles the visual addition; we update our source of truth.
+      // It typically appends, so we replicate that.
+      if (!currentChain.includes(detail.option.value)) {
+        newActiveChainIds = [...currentChain, detail.option.value];
+      } else {
+        // If the prompt is already in the chain, and component somehow allowed adding again,
+        // we keep the chain as is to avoid duplicate IDs in our store.
+        newActiveChainIds = [...currentChain];
+        window.api.log("debug", `Prompt "${detail.option.label}" already in chain during 'add' event.`);
+      }
+    } else if (detail.type === 'remove') {
+      newActiveChainIds = currentChain.filter(id => id !== detail.option.value);
+    } else if (detail.type === 'removeAll') {
+      newActiveChainIds = [];
+    } else {
+      // This case should ideally not be reached if event types are constrained.
+      window.api.log("error", `Unknown multiselect change event detail: ${JSON.stringify(detail)}`);
+      return; // Do not update if the event is not understood.
+    }
+
+    // Only update the store if the chain has actually changed to prevent unnecessary reactivity.
+    if (JSON.stringify(currentChain) !== JSON.stringify(newActiveChainIds)) {
+      settings.update(s => ({
+        ...s,
+        activePromptChain: newActiveChainIds
+      }));
+    }
+    // The reactive block `$: { ... }` (lines 69-101) will derive selectedMappedOptions
+    // from the updated $settings.activePromptChain, which then updates the `selected` prop of the Multiselect.
   };
 
   // Helper to open modal for view/edit/add
