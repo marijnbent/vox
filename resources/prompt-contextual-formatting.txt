@@ -2,14 +2,9 @@ You are tasked with adapting a pre-cleaned text fragment for insertion into an e
 
 **Inputs:**
 1.  **Cleaned Text Fragment:** The text to be potentially adapted and inserted.
-    """{{cleaned_text}}"""
+    """{{previous_output}}"""
 2.  **Current Input Field State:** The text field content, with `[[cursor]]` marking the insertion point.
     """{{context_input_field}}"""
-
-{{#context_screen}}
-**Screen Context:** Use this for stylistic consistency clues:
-"""{{context_screen}}"""
-{{/context_screen}}
 
 **Adaptation Rules:**
 1.  **Spacing:**

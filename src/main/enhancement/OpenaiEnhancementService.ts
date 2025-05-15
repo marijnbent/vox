@@ -18,17 +18,13 @@ const CONTEXTUAL_FORMATTING_PROMPT_FILENAME = "prompt-contextual-formatting.txt"
 const DEFAULT_CLEAN_TRANSCRIPTION_TEMP = 0.1;
 const DEFAULT_CONTEXTUAL_FORMATTING_TEMP = 1.0;
 
-const FALLBACK_CLEAN_TEMPLATE = "Clean this: {{transcription}}";
-const FALLBACK_FORMATTING_TEMPLATE = "Format this: {{previous_output}}";
-
-// Map default prompt IDs to their human-friendly names
 const DEFAULT_PROMPT_NAMES: Record<string, string> = {
   [DEFAULT_CLEAN_TRANSCRIPTION_ID]: 'Clean Transcription',
   [DEFAULT_CONTEXTUAL_FORMATTING_ID]: 'Input Formatting'
 };
 
-// Helper function to read prompt file content with fallback
-async function readPromptFileContent(fileName: string, fallbackTemplate: string): Promise<string> {
+// Helper function to read prompt file content
+async function readPromptFileContent(fileName: string): Promise<string> {
   try {
     const basePath = app.isPackaged
         ? process.resourcesPath
@@ -37,8 +33,10 @@ async function readPromptFileContent(fileName: string, fallbackTemplate: string)
     logger.debug(`Attempting to read default prompt file: ${filePath}`);
     return await fs.readFile(filePath, 'utf-8');
   } catch (error) {
-    logger.error(`Failed to read default prompt file "${fileName}":`, error, `Using fallback.`);
-    return fallbackTemplate;
+    logger.error(`Failed to read default prompt file "${fileName}":`, error);
+    throw new Error(
+      `Unable to load prompt file "${fileName}": ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -50,13 +48,13 @@ export class OpenaiEnhancementService implements EnhancementService {
   }
 
   private async initializeDefaultPrompts(): Promise<void> {
-    const cleanTemplate = await readPromptFileContent(CLEAN_TRANSCRIPTION_PROMPT_FILENAME, FALLBACK_CLEAN_TEMPLATE);
+    const cleanTemplate = await readPromptFileContent(CLEAN_TRANSCRIPTION_PROMPT_FILENAME);
     this.defaultPrompts.set(DEFAULT_CLEAN_TRANSCRIPTION_ID, {
       template: cleanTemplate,
       temperature: DEFAULT_CLEAN_TRANSCRIPTION_TEMP,
     });
 
-    const formatTemplate = await readPromptFileContent(CONTEXTUAL_FORMATTING_PROMPT_FILENAME, FALLBACK_FORMATTING_TEMPLATE);
+    const formatTemplate = await readPromptFileContent(CONTEXTUAL_FORMATTING_PROMPT_FILENAME);
     this.defaultPrompts.set(DEFAULT_CONTEXTUAL_FORMATTING_ID, {
       template: formatTemplate,
       temperature: DEFAULT_CONTEXTUAL_FORMATTING_TEMP,

@@ -100,6 +100,7 @@ src/
         WaterWaveAnimation.svelte
       lib/
         audioRecorder.ts
+        mediaManager.ts
         promptManager.ts
       App.svelte
       env.d.ts
@@ -858,8 +859,7 @@ import * as historyService from '../historyService';
 import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import { getFocusedInputTextWithCursor, type FocusedInputContext } from './macOSIntegration';
-import type { EnhancementPrompt, EnhancementSettings } from '../store';
-import type { HistoryRecord } from '../historyService';
+import type { EnhancementSettings } from '../store';
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
@@ -925,6 +925,21 @@ async function handleTranscribeAudio(
 
     historyService.addHistoryEntry({ originalText, enhancedText: finalText !== originalText ? finalText : null, promptDetails });
     sendToMain('transcription-result', finalText);
+
+    clipboard.writeText(finalText);
+
+    if (process.platform === 'darwin') {
+      exec('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', (error) => {
+        if (error) {
+          logger.error('Failed to simulate paste action:', error);
+        } else {
+          logger.info('Successfully simulated paste action.');
+        }
+      });
+    } else {
+      logger.warn('Auto-paste is only supported on macOS.');
+    }
+
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error('IPC: transcribe-audio failed:', msg);
@@ -979,6 +994,9 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('requestMediaPermission', handleRequestMediaPermission);
     ipcMain.handle('openSettingsURL', handleOpenSettingsURL);
     ipcMain.handle('getFocusedInputFieldText', handleGetFocusedInputFieldText);
+    ipcMain.handle('controlMusic', handleControlMusic);
+    ipcMain.handle('setSystemVolume', handleSetSystemVolume);
+    ipcMain.handle('getSystemVolume', handleGetSystemVolume);
 
     ipcMain.handle('getHistory', (_, page?: number, pageSize?: number) => {
         logger.info(`IPC: Received request for history page ${page || 1}`);
@@ -1155,6 +1173,89 @@ export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus
 async function handleGetFocusedInputFieldText(): Promise<FocusedInputContext | null> {
     logger.debug('IPC: Received request for getFocusedInputFieldText, calling macOSIntegration module.');
     return getFocusedInputTextWithCursor();
+}
+
+async function executeAppleScript(script: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        exec(`osascript -e '${script}'`, (error, stdout, stderr) => {
+            if (error) {
+                logger.error(`AppleScript execution error: ${error.message} Stderr: ${stderr}`);
+                reject(error);
+                return;
+            }
+            if (stderr) {
+                logger.warn(`AppleScript execution stderr: ${stderr}`);
+            }
+            resolve(stdout.trim());
+        });
+    });
+}
+
+async function handleControlMusic(_event: Electron.IpcMainInvokeEvent, action: 'playpause' | 'play' | 'pause'): Promise<void> {
+    if (process.platform !== 'darwin') {
+        logger.warn('Music control is only available on macOS.');
+        return;
+    }
+    logger.info(`IPC: handleControlMusic received action: ${action}`);
+    const scripts = [
+        `tell application "Spotify" to ${action}`,
+        `tell application "Music" to ${action}`,
+    ];
+
+    for (const script of scripts) {
+        try {
+            await executeAppleScript(script);
+            logger.info(`Successfully executed AppleScript for music control: ${script}`);
+            return;
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.debug(`Failed to control music with script "${script}", trying next. Error: ${errorMessage}`);
+        }
+    }
+    logger.warn(`Could not control music; no target application (Spotify, Music) responded to action: ${action}.`);
+}
+
+
+async function handleSetSystemVolume(_event: Electron.IpcMainInvokeEvent, volume: number): Promise<void> {
+    if (process.platform !== 'darwin') {
+        logger.warn('Setting system volume is only available on macOS.');
+        return;
+    }
+    if (typeof volume !== 'number' || volume < 0 || volume > 100) {
+        logger.error(`IPC: Invalid volume level: ${volume}. Must be between 0 and 100.`);
+        throw new Error('Invalid volume level. Must be between 0 and 100.');
+    }
+    logger.info(`IPC: handleSetSystemVolume received volume: ${volume}`);
+    const script = `set volume output volume ${volume}`;
+    try {
+        await executeAppleScript(script);
+        logger.info(`System volume set to ${volume}`);
+    } catch (error) {
+        logger.error(`Failed to set system volume to ${volume}:`, error);
+        throw error; // Re-throw to inform the renderer
+    }
+}
+
+async function handleGetSystemVolume(): Promise<number | null> {
+    if (process.platform !== 'darwin') {
+        logger.warn('Getting system volume is only available on macOS.');
+        return null;
+    }
+    logger.info('IPC: handleGetSystemVolume received request.');
+    const script = `output volume of (get volume settings)`;
+    try {
+        const result = await executeAppleScript(script);
+        const volume = parseInt(result, 10);
+        if (isNaN(volume)) {
+            logger.error(`Could not parse system volume from AppleScript result: "${result}"`);
+            return null;
+        }
+        logger.info(`Current system volume retrieved: ${volume}`);
+        return volume;
+    } catch (error) {
+        logger.error('Failed to get system volume:', error);
+        return null;
+    }
 }
 
 ================
@@ -2500,6 +2601,8 @@ interface TranscriptionSettings {
   openaiModel: 'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe';
   deepgramApiKey: string;
   deepgramModel: 'nova-3' | 'enhanced' | 'whisper-large';
+  musicManagementEnabled?: boolean; // Optional for backwards compatibility
+  musicManagementAction?: 'none' | 'pause' | 'lowerVolume'; // Optional
 }
 
 interface EnhancementSettings {
@@ -2570,7 +2673,9 @@ const store = new Store<StoreSchema>({
       openaiApiKey: '',
       openaiModel: 'gpt-4o-mini-transcribe',
       deepgramApiKey: '',
-      deepgramModel: 'nova-3'
+      deepgramModel: 'nova-3',
+      musicManagementEnabled: true, // Default to true
+      musicManagementAction: 'pause' // Default to 'pause'
     },
     enhancements: {
       enabled: false,
@@ -2660,6 +2765,9 @@ declare global {
       getLogFilePath: () => Promise<string>;
       getLogLines: (lineCount?: number) => Promise<string[]>;
       playSystemSound: (soundName: string) => Promise<void>;
+      controlMusic: (action: 'playpause' | 'play' | 'pause') => Promise<void>;
+      setSystemVolume: (volume: number) => Promise<void>;
+      getSystemVolume: () => Promise<number | null>;
     }
   }
 }
@@ -2753,6 +2861,9 @@ const api = {
   getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
   playSystemSound: (soundName: string): Promise<void> => ipcRenderer.invoke('playSystemSound', soundName),
+  controlMusic: (action: 'playpause' | 'play' | 'pause'): Promise<void> => ipcRenderer.invoke('controlMusic', action),
+  setSystemVolume: (volume: number): Promise<void> => ipcRenderer.invoke('setSystemVolume', volume),
+  getSystemVolume: (): Promise<number | null> => ipcRenderer.invoke('getSystemVolume'),
 };
 
 if (process.contextIsolated) {
@@ -4904,6 +5015,10 @@ File: src/renderer/src/components/settings/Transcription.svelte
   const deepgramModel = writable<"nova-3" | "enhanced" | "whisper-large">(
     "nova-3",
   );
+  const musicManagementEnabled = writable(true);
+  const musicManagementAction = writable<"none" | "pause" | "lowerVolume">(
+    "pause",
+  );
 
   let isLoading = true;
 
@@ -4929,6 +5044,14 @@ File: src/renderer/src/components/settings/Transcription.svelte
       openaiModel.set(initialSettings.openaiModel || "gpt-4o-mini-transcribe");
       deepgramApiKey.set(initialSettings.deepgramApiKey || "");
       deepgramModel.set(initialSettings.deepgramModel || "nova-3");
+      musicManagementEnabled.set(
+        initialSettings.musicManagementEnabled === undefined
+          ? true // Default to true if not set
+          : initialSettings.musicManagementEnabled,
+      );
+      musicManagementAction.set(
+        initialSettings.musicManagementAction || "pause", // Default to pause if not set
+      );
     } catch (error) {
       window.api.log("error", "Failed to load transcription settings:", error);
     } finally {
@@ -4947,6 +5070,8 @@ File: src/renderer/src/components/settings/Transcription.svelte
       openaiModel: get(openaiModel),
       deepgramApiKey: get(deepgramApiKey),
       deepgramModel: get(deepgramModel),
+      musicManagementEnabled: get(musicManagementEnabled),
+      musicManagementAction: get(musicManagementAction),
     };
 
     saveTimeout = setTimeout(async () => {
@@ -4969,6 +5094,8 @@ File: src/renderer/src/components/settings/Transcription.svelte
     const currentModelValue = $openaiModel;
     const currentDeepgramApiKeyValue = $deepgramApiKey;
     const currentDeepgramModelValue = $deepgramModel;
+    const currentMusicManagementEnabled = $musicManagementEnabled;
+    const currentMusicManagementAction = $musicManagementAction;
 
     saveSettings();
   }
@@ -5077,6 +5204,32 @@ File: src/renderer/src/components/settings/Transcription.svelte
           </select>
           <label class="label" for="deepgram-model-select">
             <span class="label-text-alt">Select the Deepgram model to use.</span
+            >
+          </label>
+        </div>
+      {/if}
+
+      <!-- Music Management Settings -->
+      <div class="divider"></div>
+      <h3 class="text-lg font-medium">Music Management During Recording</h3>
+      {#if $musicManagementEnabled}
+        <div class="form-control">
+          <label class="label" for="music-action-select">
+            <span class="label-text">Action to take:</span>
+          </label>
+          <select
+            id="music-action-select"
+            class="select select-bordered w-full max-w-xs"
+            bind:value={$musicManagementAction}
+          >
+            <option value="pause">Pause Music</option>
+            <option value="lowerVolume">Lower Music Volume</option>
+            <option value="none">Do Nothing</option>
+          </select>
+          <label class="label" for="music-action-select">
+            <span class="label-text-alt"
+              >Choose how music playback should be affected when recording
+              starts.</span
             >
           </label>
         </div>
@@ -5218,6 +5371,7 @@ File: src/renderer/src/components/WaterWaveAnimation.svelte
 File: src/renderer/src/lib/audioRecorder.ts
 ================
 import { writable } from 'svelte/store';
+import { manageMusicOnRecordStart, restoreMusicAfterRecordStop } from './mediaManager';
 
 export const recordingStatus = writable<'idle' | 'recording' | 'processing' | 'error'>('idle');
 export const transcriptionResult = writable<string | null>(null);
@@ -5283,6 +5437,9 @@ export function initializeAudioRecorder(): () => void {
         audioContext = null;
     }
     cancelRequested = false;
+    // Ensure music is restored if cleanup is called during an active managed session
+    // However, primary restoration points are more specific to stop/cancel events.
+    // restoreMusicAfterRecordStop(); // Decided against a generic call here to avoid unintended restorations.
   };
 }
 
@@ -5302,12 +5459,20 @@ async function startRecording(): Promise<void> {
   }
 
   let obtainedStream: MediaStream | null = null;
+  let musicManaged = false;
 
   try {
+    const transcriptionSettings = await window.api.getStoreValue("transcription") as any || {};
+    if (transcriptionSettings.musicManagementEnabled && transcriptionSettings.musicManagementAction) {
+      await manageMusicOnRecordStart(transcriptionSettings.musicManagementAction);
+      musicManaged = true;
+    }
+
     obtainedStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (cancelRequested) {
         window.api.log('warn', 'Recording cancelled after getUserMedia was granted. Cleaning up stream.');
         obtainedStream?.getTracks().forEach(track => track.stop());
+        if (musicManaged) await restoreMusicAfterRecordStop();
         return;
     }
     audioStream = obtainedStream;
@@ -5320,6 +5485,7 @@ async function startRecording(): Promise<void> {
         window.api.log('warn', 'Recording cancelled before creating MediaRecorder.');
         audioStream?.getTracks().forEach(track => track.stop());
         audioStream = null;
+        if (musicManaged) await restoreMusicAfterRecordStop();
         return;
     }
 
@@ -5343,17 +5509,18 @@ async function startRecording(): Promise<void> {
 
       if (cancelRequested) {
           window.api.log('info', 'Recording cancelled (detected in onstop), discarding audio data.');
-          // Cancel sound is primarily played on IPC trigger. Not playing here to avoid duplicates.
           cleanupAfterRecording(true);
           return;
       }
 
-      // If not cancelled, it's a normal stop. Play stop sound.
+      // If not cancelled, it's a normal stop.
+      await restoreMusicAfterRecordStop(); // Restore music before playing sound
       window.api.playSystemSound(SOUND_STOP).catch(err => window.api.log('warn', `Failed to play stop sound: ${err}`));
+
 
       if (audioChunks.length === 0) {
           window.api.log('warn', 'No audio data recorded (or cleared due to cancel).');
-          cleanupAfterRecording(false);
+          cleanupAfterRecording(false); 
           return;
       }
 
@@ -5444,6 +5611,9 @@ async function startRecording(): Promise<void> {
 
   } catch (err) {
      window.api.log('error', 'Error accessing microphone or starting recorder:', err);
+     if (musicManaged) {
+        await restoreMusicAfterRecordStop().catch(e => window.api.log('warn', 'Error restoring music in startRecording catch:', e));
+     }
      let errorMessage = 'Unknown error';
      if (err instanceof Error) {
          errorMessage = err.message;
@@ -5464,8 +5634,13 @@ async function startRecording(): Promise<void> {
   }
 }
 
-function cleanupAfterRecording(isCancellationOrSilence: boolean): void {
+async function cleanupAfterRecording(isCancellationOrSilence: boolean): Promise<void> {
     window.api.log('debug', `Cleaning up audio resources (Is Cancellation/Silence: ${isCancellationOrSilence})`);
+    
+    // Always attempt to restore music state during cleanup, especially for cancellations.
+    // The mediaManager's internal state (originalMusicState) prevents issues if already restored.
+    await restoreMusicAfterRecordStop().catch(e => window.api.log('warn', 'Error restoring music in cleanupAfterRecording:', e));
+
     audioStream?.getTracks().forEach(track => {
         try { track.stop(); } catch(e) { window.api.log('warn', 'Error stopping track in cleanup:', e); }
     });
@@ -5475,28 +5650,29 @@ function cleanupAfterRecording(isCancellationOrSilence: boolean): void {
     window.api.log('debug', `Cleanup done, cancelRequested flag state preserved: ${cancelRequested}`);
 }
 
-export function stopRecording(): void {
+export async function stopRecording(): Promise<void> {
   window.api.log('info', `Stop recording requested. Current state: ${mediaRecorder?.state}. Cancelled: ${cancelRequested}`);
   if (cancelRequested) {
       window.api.log('warn', 'Stop ignored because cancelRequested is true.');
-      cleanupAfterRecording(true);
+      await cleanupAfterRecording(true);
       return;
   }
   const recorder = mediaRecorder;
   if (recorder && recorder.state === 'recording') {
     try {
+        // restoreMusicAfterRecordStop() will be called in recorder.onstop for normal stops
         recorder.stop();
     } catch (e) {
         window.api.log('error', 'Error calling MediaRecorder.stop():', e);
         handleTranscriptionError(`Failed to stop recorder: ${e instanceof Error ? e.message : String(e)}`);
-        cleanupAfterRecording(false);
+        await cleanupAfterRecording(false);
     }
   } else if (recorder && recorder.state === 'inactive') {
       window.api.log('warn', 'Stop requested but recorder is already inactive. Cleaning up.');
-      cleanupAfterRecording(false);
+      await cleanupAfterRecording(false);
   } else {
      window.api.log('warn', `Stop requested but no active/inactive recorder found or state is ${recorder?.state}.`);
-     cleanupAfterRecording(false);
+     await cleanupAfterRecording(false);
   }
 }
 
@@ -5575,6 +5751,116 @@ export function get<T>(store: { subscribe: (cb: (value: T) => void) => () => voi
   unsubscribe();
   return value;
 }
+
+================
+File: src/renderer/src/lib/mediaManager.ts
+================
+interface MusicState {
+  isPlaying: boolean;
+  volume: number | null;
+}
+
+let originalMusicState: MusicState | null = null;
+const LOWERED_VOLUME_PERCENTAGE = 0.2;
+
+export const manageMusicOnRecordStart = async (
+  action: "none" | "pause" | "lowerVolume",
+): Promise<void> => {
+  if (action === "none") {
+    return;
+  }
+
+  let currentVolume: number | null = null;
+  let successfullyManaged = false;
+
+  if (action === "lowerVolume") {
+    try {
+      currentVolume = await window.api.getSystemVolume();
+      if (currentVolume === null) {
+        window.api.log("warn", "[MediaManager] Could not get current system volume to lower it.");
+        return;
+      }
+    } catch (error) {
+      window.api.log("error", "[MediaManager] Error getting system volume:", error);
+      throw error;
+    }
+  }
+
+  originalMusicState = {
+    isPlaying: true,
+    volume: currentVolume,
+  };
+
+  if (action === "pause") {
+    if (typeof window.api.controlMusic !== 'function') {
+      window.api.log("warn", "[MediaManager] controlMusic function not available on window.api. Cannot pause music.");
+      return;
+    }
+    try {
+      await window.api.controlMusic("pause");
+      window.api.log("info", "[MediaManager] Sent 'pause' command to music applications.");
+      successfullyManaged = true;
+    } catch (error) {
+      window.api.log("error", "[MediaManager] Error sending 'pause' command:", error);
+      throw error;
+    }
+  } else if (action === "lowerVolume" && originalMusicState.volume !== null) {
+    try {
+      const targetVolume = LOWERED_VOLUME_PERCENTAGE * currentVolume;
+      await window.api.setSystemVolume(targetVolume);
+      window.api.log(
+        "info",
+        `[MediaManager] System volume lowered to ${targetVolume}%. Original: ${originalMusicState.volume}%`,
+      );
+      successfullyManaged = true;
+    } catch (error) {
+      window.api.log("error", "[MediaManager] Error lowering system volume:", error);
+      originalMusicState.volume = null;
+      throw error;
+    }
+  }
+  
+  if (!successfullyManaged) { 
+    originalMusicState = null;
+  }
+};
+
+export const restoreMusicAfterRecordStop = async (): Promise<void> => {
+  if (!originalMusicState) {
+    return;
+  }
+
+  const { isPlaying, volume } = originalMusicState;
+  if (volume !== null) {
+    if (typeof window.api.setSystemVolume !== 'function') {
+      window.api.log("warn", "[MediaManager] setSystemVolume function not available on window.api. Cannot restore volume.");
+    } else {
+      try {
+        await window.api.setSystemVolume(volume);
+        window.api.log("info", `[MediaManager] System volume restored to ${volume}%.`);
+      } catch (error) {
+        window.api.log("error", "[MediaManager] Error restoring system volume:", error);
+      }
+    }
+  }
+
+  const transcriptionSettings = await window.api.getStoreValue("transcription") as any || {};
+  const lastAction = transcriptionSettings.musicManagementAction;
+
+  if (lastAction === "pause" && isPlaying) {
+    if (typeof window.api.controlMusic !== 'function') {
+      window.api.log("warn", "[MediaManager] controlMusic function not available on window.api. Cannot resume music.");
+    } else {
+      try {
+        await window.api.controlMusic("play");
+        window.api.log("info", "[MediaManager] Sent 'play' command to music applications to resume.");
+      } catch (error) {
+        window.api.log("error", "[MediaManager] Error sending 'play' command:", error);
+      }
+    }
+  }
+  originalMusicState = null;
+};
 
 ================
 File: src/renderer/src/lib/promptManager.ts
