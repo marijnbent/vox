@@ -32,9 +32,9 @@ function getSwiftHelperPath(): string {
  * Retrieves the text content and selection range from the focused input element
  * on macOS using a native Swift helper.
  *
- * @returns A Promise that resolves to FocusedInputContext if successful, or null otherwise.
+ * @returns A Promise that resolves to a string with `[]` marking the cursor position, or null otherwise.
  */
-export async function getFocusedInputTextWithCursor(): Promise<FocusedInputContext | null> {
+export async function getFocusedInputTextWithCursor(): Promise<string | null> {
     if (process.platform !== 'darwin') {
         logger.warn('[macOSIntegration] getFocusedInputTextWithCursor is only available on macOS.');
         return null;
@@ -135,7 +135,13 @@ export async function getFocusedInputTextWithCursor(): Promise<FocusedInputConte
                 );
             }
 
-            resolve(context);
+            // Transform into a single string with cursor brackets
+            const raw = context.text;
+            const startPos = context.selectedRange?.start ?? raw.length;
+            const selLen = context.selectedRange?.length ?? 0;
+            const textWithCursor = raw.slice(0, startPos) + "[[cursor]]" + raw.slice(startPos + selLen);
+
+            resolve(textWithCursor);
         });
     });
 }

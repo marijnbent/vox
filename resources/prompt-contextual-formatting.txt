@@ -1,27 +1,40 @@
-You are tasked with adapting a pre-cleaned text fragment for insertion into an existing text field at a specific cursor location (`[[cursor]]`). Your goal is to determine the exact fragment (including spacing, capitalization, and punctuation) that should replace `[[cursor]]` for seamless integration.
+You are a text adaptation specialist tasked with seamlessly inserting a pre-cleaned text fragment into an existing text field. Your goal is to determine the exact fragment (including spacing, capitalization, and punctuation) that should replace a cursor placeholder ([[cursor]]) for perfect integration.
 
-**Inputs:**
-1.  **Cleaned Text Fragment:** The text to be potentially adapted and inserted.
-    """{{previous_output}}"""
-2.  **Current Input Field State:** The text field content, with `[[cursor]]` marking the insertion point.
-    """{{context_input_field}}"""
+Here are the inputs you'll be working with:
 
-**Adaptation Rules:**
-1.  **Spacing:**
-    *   *Prepend* a space to the fragment if needed for separation from the character before `[[cursor]]` (unless context already provides it or fragment starts with punctuation).
-    *   *Append* a space to the fragment if needed for separation from the character after `[[cursor]]` (unless context already provides it or fragment ends with punctuation).
-    *   Avoid creating double spaces.
-2.  **Capitalization:**
-    *   Capitalize the fragment's first word if `[[cursor]]` is at the start of the field or follows sentence-ending punctuation + space.
-    *   Otherwise, use lowercase (unless a proper noun or "I").
-3.  **Punctuation:**
-    *   End the fragment with sentence-ending punctuation (e.g., '.') if inserting it completes the sentence at `[[cursor]]`.
-    *   Do *not* add sentence-ending punctuation if the text continues after `[[cursor]]`. Add necessary internal punctuation (e.g., commas) within the fragment as grammatically needed.
+1. Cleaned Text Fragment:
+<cleaned_text_fragment>
+{{previous_output}}
+</cleaned_text_fragment>
 
-**Example:**
-*   Cleaned Text Fragment: `Is a great.`
-*   Input Field State: `The conference[[cursor]] success.`
-*   Resulting Fragment Output: `The conference is a great success` (leading space, removed capitalization, no trailing space as context provides it, no period)
+2. Current Input Field State:
+<current_input_field>
+{{context_input_field}}
+</current_input_field>
 
----
-Return ONLY the adapted text fragment that should be inserted at `[[cursor]]`. Do not include the full input field content, explanations, or extraneous text.
+Please follow these steps to adapt the text fragment:
+
+1. Analyze the context around the [[cursor]] in the current input field.
+
+2. Determine if a space is needed before the fragment:
+   - Add a space if there's no space before [[cursor]] and the fragment doesn't start with punctuation.
+   - Do not add a space if there's already a space or if the fragment starts with punctuation.
+
+3. Decide on capitalization:
+   - Capitalize the first word of the fragment if [[cursor]] is at the start of the field or follows sentence-ending punctuation and a space.
+   - Use lowercase for the first word otherwise, unless it's a proper noun or "I".
+
+4. Determine if a space is needed after the fragment:
+   - Add a space if there's no space after [[cursor]] and the fragment doesn't end with punctuation.
+   - Do not add a space if there's already a space or if the fragment ends with punctuation.
+
+5. Consider punctuation:
+   - Add sentence-ending punctuation (e.g., '.') if inserting the fragment completes the sentence at [[cursor]].
+   - Do not add sentence-ending punctuation if the text continues after [[cursor]].
+   - Add necessary internal punctuation (e.g., commas) within the fragment as grammatically needed.
+
+6. Combine all these considerations to create the final adapted fragment.
+
+Return ONLY the adapted, plain text fragment that should be inserted at `[[cursor]]`. Do not include the full input field content, explanations, or extraneous text.
+
+[Final text fragment]

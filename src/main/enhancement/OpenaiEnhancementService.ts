@@ -7,6 +7,7 @@ import { EnhancementService } from './EnhancementService';
 import { logger } from '../logger';
 import store from '../store';
 import type { EnhancementSettings, EnhancementPrompt } from '../store';
+import { getFocusedInputTextWithCursor } from '../modules/macOSIntegration';
 
 // Define constants for the new default prompts
 const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
@@ -117,7 +118,7 @@ export class OpenaiEnhancementService implements EnhancementService {
     }
 
     if (enhancementSettings.useContextInputField) {
-      baseContextData.context_input_field = "[Input Field Placeholder - Not Implemented]";
+      baseContextData.context_input_field = await getFocusedInputTextWithCursor();
     }
 
     if (enhancementSettings.useContextClipboard) {
@@ -137,13 +138,20 @@ export class OpenaiEnhancementService implements EnhancementService {
         const promptDetailsEntry = promptMap.get(promptId);
 
         if (!promptDetailsEntry) {
-            logger.warn(`Prompt ID "${promptId}" not found in map. Skipping step ${i + 1}.`);
-            continue;
+          logger.warn(`Prompt ID "${promptId}" not found in map. Skipping step ${i + 1}.`);
+          continue;
         }
 
-        if (promptId === DEFAULT_CONTEXTUAL_FORMATTING_ID && !enhancementSettings.useContextInputField) {
-            logger.warn(`Prompt ID "${promptId}" skipped due to context input field settings.`);
+        if (promptId === DEFAULT_CONTEXTUAL_FORMATTING_ID) {
+          if (!enhancementSettings.useContextInputField) {
+            logger.info(`Prompt ID "${promptId}" skipped due to context input field settings.`);
             continue;
+          }
+
+          if (baseContextData.context_input_field === '[[cursor]]') {
+            logger.info(`Prompt ID "${promptId}" skipped as input is empty.`);
+            continue;
+          }
         }
 
         const contextData = {
