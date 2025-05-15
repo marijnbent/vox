@@ -15,8 +15,6 @@ import { getFocusedInputTextWithCursor, type FocusedInputContext } from './macOS
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 
-
-
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
 
@@ -38,6 +36,43 @@ export function initializeIpcHandlers(dependencies: {
 let _getProcessingCancelledFlag: () => boolean = () => false;
 let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
 let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
+
+// New transcription handler with enhancement and history details
+async function handleTranscribeAudio(
+  _event: Electron.IpcMainInvokeEvent,
+  audio: { audioData: ArrayBuffer; mimeType: string }
+): Promise<void> {
+  _setProcessingCancelledFlag(false);
+  _sendRecordingStatus('processing');
+  try {
+    if (!transcriptionManager) throw new Error('TranscriptionManager not initialized.');
+    const mainWindow = getMainWindow();
+    if (!mainWindow) throw new Error('Main window not available.');
+
+    const buffer = Buffer.from(audio.audioData);
+    const originalText = await transcriptionManager.transcribe(buffer, audio.mimeType, undefined);
+    let finalText = originalText;
+    let promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string }[] = [];
+
+    const settings = store.get('enhancements') as EnhancementSettings;
+    if (settings.enabled) {
+      const { finalText: enhanced, promptDetails: details } = await enhancementManager.enhance(originalText);
+      finalText = enhanced;
+      promptDetails = details;
+    }
+
+    historyService.addHistoryEntry({ originalText, enhancedText: finalText !== originalText ? finalText : null, promptDetails });
+    sendToMain('transcription-result', finalText);
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('IPC: transcribe-audio failed:', msg);
+    sendToMain('transcription-error', msg);
+    _sendRecordingStatus('error');
+    throw err;
+  } finally {
+    _sendRecordingStatus('idle');
+  }
+}
 
 export function setupIpcHandlers(): void {
     logger.info('Setting up IPC Handlers...');
@@ -213,156 +248,6 @@ export function setupIpcHandlers(): void {
     });
 
     logger.info('IPC Handlers setup complete.');
-}
-
-async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeType: string }): Promise<void> {
-    _setProcessingCancelledFlag(false);
-    const mainWindow = getMainWindow();
-
-    if (!transcriptionManager) {
-        logger.error('IPC: Cannot transcribe audio, TranscriptionManager not initialized.');
-        _sendRecordingStatus('error');
-        throw new Error('TranscriptionManager not initialized.');
-    }
-    if (!mainWindow) {
-        logger.error('IPC: Cannot transcribe audio, mainWindow is not available.');
-        _sendRecordingStatus('error');
-        throw new Error('Main window not available.');
-    }
-
-    logger.info(`IPC: Received audio data (${audio.audioData.byteLength} bytes, type: ${audio.mimeType}) for transcription.`);
-    _sendRecordingStatus('processing');
-
-    let originalTranscriptionText = '';
-
-    let finalText = '';
-    let enhancementAttempted = false;
-    let finalPromptRendered: string | null = null;
-
-    try {
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape before transcription.');
-            return;
-        }
-
-        const audioBuffer = Buffer.from(audio.audioData);
-        originalTranscriptionText = await transcriptionManager.transcribe(audioBuffer, audio.mimeType, undefined);
-        finalText = originalTranscriptionText;
-        logger.info(`IPC: Transcription successful: "${originalTranscriptionText}"`);
-
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape after transcription.');
-            return;
-        }
-
-        const enhancementSettings = store.get('enhancements') as EnhancementSettings;
-        if (enhancementManager && enhancementSettings.enabled && !_getProcessingCancelledFlag()) {
-            enhancementAttempted = true;
-            try {
-                logger.info('Applying enhancement...');
-                // The enhancementManager.enhance now handles the prompt chain internally.
-                // We don't need to render a single prompt here for history anymore.
-                // The OpenaiEnhancementService logs each step of the chain.
-                // For simplicity in history, we'll set finalPromptRendered to null.
-
-                // const contextData setup and Mustache.render for finalPromptRendered is removed.
-                // If specific context data is still needed by the enhancement service,
-                // it should be passed through or handled within the service itself.
-                // The current OpenaiEnhancementService already has logic for context variables.
-
-                finalPromptRendered = null; // Simplified for history
-
-                const enhancedTextResult = await enhancementManager.enhance(originalTranscriptionText);
-
-                if (enhancedTextResult !== originalTranscriptionText) {
-                     logger.info(`IPC: Enhancement successful: "${enhancedTextResult}"`);
-                     finalText = enhancedTextResult;
-                 } else {
-                     logger.info('Enhancement did not modify the text.');
-                 }
-            } catch (enhancementError) {
-                logger.error('Enhancement step failed:', enhancementError);
-                finalPromptRendered = null;
-            }
-        } else if (_getProcessingCancelledFlag()) {
-             logger.info('Enhancement skipped due to cancellation.');
-        } else {
-            logger.info('Enhancement disabled or provider is none, skipping.');
-        }
-
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape before history/paste.');
-            return;
-        }
-
-        try {
-            let promptIdForHistory: string | null = null; // Simplified for history
-            if (enhancementAttempted) {
-                // Optionally, store the chain as a string or just the first prompt ID
-                // For now, keeping it simple as null, as the service logs details.
-                // promptIdForHistory = enhancementSettings.activePromptChain.join(', ');
-            }
-            const historyEntryData: Omit<HistoryRecord, 'id' | 'timestamp'> = {
-                originalText: originalTranscriptionText,
-                renderedPrompt: finalPromptRendered, // Now null
-                enhancedText: finalText !== originalTranscriptionText ? finalText : null,
-                promptIdUsed: promptIdForHistory, // Now null
-                promptChainUsed: enhancementSettings.activePromptChain // Save the active prompt chain
-            };
-            historyService.addHistoryEntry(historyEntryData);
-        } catch(historyError) {
-             logger.error('Failed to save transcription to history:', historyError);
-        }
-
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape before sending result/pasting.');
-            return;
-        }
-
-        sendToMain('transcription-result', finalText);
-        _sendRecordingStatus('idle');
-
-        if (store.get('settings.autoPaste', true) && !_getProcessingCancelledFlag()) {
-           logger.info('Auto-paste enabled, writing to clipboard and simulating paste...');
-           clipboard.writeText(finalText);
-           if (process.platform === 'darwin') {
-              const appleScript = `
-                tell application "System Events"
-                  keystroke "v" using command down
-                end tell
-              `;
-              exec(`osascript -e '${appleScript}'`, (error) => {
-                if (error) {
-                  logger.error('Failed to execute paste AppleScript:', error);
-                  sendToMain('transcription-error', 'Transcription complete, but failed to paste.');
-                } else {
-                  logger.info('Paste simulated via AppleScript.');
-                }
-              });
-           } else {
-              logger.warn('Auto-paste simulation not implemented for this platform.');
-              sendToMain('transcription-error', 'Transcription complete, but auto-paste not supported on this OS.');
-           }
-        } else if (_getProcessingCancelledFlag()) {
-            logger.info('Paste skipped due to cancellation.');
-        } else {
-            logger.info('Auto-paste disabled, skipping paste action.');
-        }
-
-    } catch (error: unknown) {
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape during error handling.');
-            if (mainProcessRecordingStatus !== 'idle') {
-                _sendRecordingStatus('idle');
-            }
-            return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error('IPC: Transcription failed:', message);
-        sendToMain('transcription-error', message);
-        _sendRecordingStatus('error');
-        throw error;
-    }
 }
 
 function handleGetAccessibilityStatus() {
