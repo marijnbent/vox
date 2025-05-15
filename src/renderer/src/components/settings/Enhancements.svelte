@@ -37,7 +37,7 @@
     activePromptChain: [
       DEFAULT_CLEAN_TRANSCRIPTION_ID,
       DEFAULT_CONTEXTUAL_FORMATTING_ID,
-    ], // Updated default
+    ],
     useTranscript: true,
     useContextScreen: false,
     useContextInputField: false,
@@ -46,27 +46,19 @@
   });
 
   let isLoading = true;
-  // customPrompts and systemPromptCache are now imported from promptManager
 
-  // State for the PromptModal
   let showPromptModal = false;
   let modalMode: "view" | "edit" | "add" = "add";
   let currentPrompt: DisplayablePrompt | null = null;
 
-  // allPrompts is now imported from promptManager
-
-  // Type for the objects used by Multiselect options and its selection
   interface MappedPromptOption {
     value: string; // Prompt ID
     label: string; // Prompt Name
     original: DisplayablePrompt; // The full prompt object
   }
 
-  // This will hold the MappedPromptOption objects selected in the Multiselect
   let selectedMappedOptions: MappedPromptOption[] = [];
 
-  // Create a stable list of options for the Multiselect component.
-  // This helps ensure referential integrity if the component relies on it.
   let multiselectComponentOptions: MappedPromptOption[] = [];
   $: multiselectComponentOptions = $allPrompts.map((p) => ({
     value: p.id,
@@ -74,8 +66,6 @@
     original: p,
   }));
 
-  // Reactive statement to synchronize `selectedMappedOptions` with `$settings.activePromptChain`
-  // and the `multiselectComponentOptions`. This is crucial for `bind:selected` to work correctly.
   $: {
     if (
       $settings &&
@@ -375,7 +365,6 @@
     try {
       await deletePromptFromManager(idToDelete, settings);
     } catch (error) {
-      // Error is already logged and alerted by the manager
       window.api.log(
         "debug",
         "Prompt deletion failed at component level, handled by manager.",
@@ -610,6 +599,11 @@
         </div>
 
         <div class="divider pt-6">Manage Prompts</div>
+        <div class="flex justify-end mb-2">
+          <button class="button cursor-pointer" on:click={() => openPromptModalWrapper()}>
+            <i class="ri-add-line mr-1"></i> Add Prompt
+          </button>
+        </div>
         <div class="space-y-2">
           {#each $allPrompts as prompt (prompt.id)}
             <div
