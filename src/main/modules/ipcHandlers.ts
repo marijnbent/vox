@@ -79,6 +79,21 @@ async function handleTranscribeAudio(
 
     historyService.addHistoryEntry({ originalText, enhancedText: finalText !== originalText ? finalText : null, promptDetails });
     sendToMain('transcription-result', finalText);
+
+    clipboard.writeText(finalText);
+
+    if (process.platform === 'darwin') {
+      exec('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', (error) => {
+        if (error) {
+          logger.error('Failed to simulate paste action:', error);
+        } else {
+          logger.info('Successfully simulated paste action.');
+        }
+      });
+    } else {
+      logger.warn('Auto-paste is only supported on macOS.');
+    }
+
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error('IPC: transcribe-audio failed:', msg);
