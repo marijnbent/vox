@@ -8,10 +8,7 @@ export interface HistoryRecord {
   id: string;
   timestamp: number;
   originalText: string;
-  renderedPrompt: string | null;
   enhancedText: string | null;
-  promptIdUsed: string | null;
-  promptNameUsed?: string | null;
   promptChainUsed?: string[] | null; // New field to store the chain of prompts used
   promptDetails?: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[]; // New field for detailed prompt information
 }
@@ -43,6 +40,7 @@ try {
     logger.error('Failed to initialize database:', error);
 }
 
+// Removed unused fields from the history table schema and ensured promptDetails is always an array.
 function initializeSchema(): void {
     if (!db) return;
     try {
@@ -51,10 +49,7 @@ function initializeSchema(): void {
                 id TEXT PRIMARY KEY,
                 timestamp INTEGER NOT NULL,
                 originalText TEXT NOT NULL,
-                renderedPrompt TEXT,
-                enhancedText TEXT,
-                promptIdUsed TEXT,
-                promptChainUsed TEXT
+                enhancedText TEXT
             );
         `);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history (timestamp);`);
@@ -80,89 +75,74 @@ function initializeSchema(): void {
 initializeSchema();
 
 export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'> & { promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }): void {
-    if (!db) {
-        logger.error('Cannot add history entry: Database not initialized.');
-        return;
-    }
+    if (!db) return;
+
     const timestamp = Date.now();
-    const id = `${timestamp}-${Math.random().toString(36).substring(2, 8)}`;
-    const sql = `
-        INSERT INTO history (id, timestamp, originalText, renderedPrompt, enhancedText, promptIdUsed, promptChainUsed)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    `;
-    const promptDetailsSql = `
+    const id = `${timestamp}-${Math.random().toString(36).substr(2, 9)}`;
+
+    const promptDetails = entry.promptDetails || []; // Ensure promptDetails is always an array
+
+    const insertHistoryStmt = db.prepare(`
+        INSERT INTO history (id, timestamp, originalText, enhancedText)
+        VALUES (?, ?, ?, ?)
+    `);
+
+    const insertPromptDetailsStmt = db.prepare(`
         INSERT INTO prompt_details (historyId, promptId, promptName, renderedPrompt, enhancedText)
         VALUES (?, ?, ?, ?, ?)
-    `;
-    const transaction = db.transaction(() => {
-        const stmt = db.prepare(sql);
-        stmt.run(
-            id,
-            timestamp,
-            entry.originalText,
-            entry.renderedPrompt ?? null,
-            entry.enhancedText ?? null,
-            entry.promptIdUsed ?? null,
-            JSON.stringify(entry.promptChainUsed ?? null)
-        );
+    `);
 
-        const promptDetailsStmt = db.prepare(promptDetailsSql);
-        for (const detail of entry.promptDetails) {
-            promptDetailsStmt.run(
-                id,
-                detail.promptId,
-                detail.promptName,
-                detail.renderedPrompt,
-                detail.enhancedText
-            );
+    const transaction = db.transaction(() => {
+        insertHistoryStmt.run(id, timestamp, entry.originalText, entry.enhancedText);
+
+        for (const detail of promptDetails) {
+            insertPromptDetailsStmt.run(id, detail.promptId, detail.promptName, detail.renderedPrompt, detail.enhancedText);
         }
     });
 
     try {
         transaction();
-        logger.info(`Added history entry: ${id}`);
+        logger.info(`History entry added with ID: ${id}`);
     } catch (error) {
         logger.error('Failed to add history entry:', error);
     }
 }
 
 export function getHistoryEntries(page = 1, pageSize = 10): PaginatedHistory | null {
-    if (!db) {
-        logger.error('Cannot get history entries: Database not initialized.');
-        return null;
-    }
+    if (!db) return null;
+
+    const offset = (page - 1) * pageSize;
+
+    const historyStmt = db.prepare(`
+        SELECT id, timestamp, originalText, enhancedText
+        FROM history
+        ORDER BY timestamp DESC
+        LIMIT ? OFFSET ?
+    `);
+
+    const promptDetailsStmt = db.prepare(`
+        SELECT promptId, promptName, renderedPrompt, enhancedText
+        FROM prompt_details
+        WHERE historyId = ?
+    `);
+
     try {
-        const countResult = db.prepare('SELECT COUNT(*) as count FROM history').get() as { count: number };
-        const totalEntries = countResult.count;
-        const totalPages = Math.ceil(totalEntries / pageSize);
-        const currentPage = Math.max(1, Math.min(page, totalPages));
-        const offset = (currentPage - 1) * pageSize;
-
-        const sql = `
-            SELECT * FROM history
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-        `;
-        const stmt = db.prepare(sql);
-        let entries = stmt.all(pageSize, offset) as HistoryRecord[];
-
-        const promptDetailsSql = `
-            SELECT * FROM prompt_details WHERE historyId = ?
-        `;
-        const promptDetailsStmt = db.prepare(promptDetailsSql);
-
-        entries = entries.map(entry => {
-            const promptDetails = promptDetailsStmt.all(entry.id);
-            return { ...entry, promptDetails };
+        const entries = historyStmt.all(pageSize, offset).map((history: any) => {
+            const details = promptDetailsStmt.all(history.id);
+            return {
+                ...history,
+                promptDetails: details
+            };
         });
 
-        logger.info(`Fetched history page ${currentPage}/${totalPages} (${entries.length} entries with prompt details)`);
+        const totalEntries = db.prepare('SELECT COUNT(*) AS count FROM history').get().count;
+        const totalPages = Math.ceil(totalEntries / pageSize);
 
         return {
             entries,
             totalEntries,
             totalPages,
-            currentPage,
+            currentPage: page
         };
     } catch (error) {
         logger.error('Failed to fetch history entries:', error);

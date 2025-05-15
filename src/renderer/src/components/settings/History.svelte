@@ -230,19 +230,19 @@
                   </div>
                 </div>
 
-                {#if $selectedEntry.promptNameUsed}
-                  <h4 class="font-semibold mb-1">Prompt: {$selectedEntry.promptNameUsed}</h4>
-                {/if}
-                {#if $selectedEntry.renderedPrompt}
-                    <div class="collapse collapse-arrow bg-base-200/50">
-                        <input type="checkbox" />
-                        <div class="collapse-title text-xs font-medium">
-                            View Rendered Prompt
-                        </div>
-                        <div class="collapse-content">
-                            <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{$selectedEntry.renderedPrompt}</pre>
-                        </div>
-                    </div>
+                {#if $selectedEntry.promptDetails.length > 0}
+                  <div>
+                    <h4 class="font-semibold mb-1">Prompt Details</h4>
+                    {#each $selectedEntry.promptDetails as detail}
+                      <div class="bg-base-200 p-3 rounded text-sm whitespace-pre-wrap break-words mb-2">
+                        <p><strong>Prompt Name:</strong> {detail.promptName}</p>
+                        <p><strong>Rendered Prompt:</strong></p>
+                        <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.renderedPrompt}</pre>
+                        <p><strong>Enhanced Text:</strong></p>
+                        <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.enhancedText}</pre>
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
 
                 {#if $selectedEntry.enhancedText}
