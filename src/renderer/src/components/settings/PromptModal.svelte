@@ -1,16 +1,18 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import type { DisplayablePrompt } from "../lib/promptManager"; // Import DisplayablePrompt
+
   // Types
   export interface PromptModalProps {
     show: boolean;
     mode: "view" | "edit" | "add";
-    prompt: any | null; // DisplayablePrompt or null
+    prompt: DisplayablePrompt | null; // Use DisplayablePrompt
     systemDefaultIds: Set<string>;
     fallbackTemperature: number;
   }
   export let show: boolean;
   export let mode: "view" | "edit" | "add";
-  export let prompt: any | null;
+  export let prompt: DisplayablePrompt | null; // Use DisplayablePrompt
   export let systemDefaultIds: Set<string>;
   export let fallbackTemperature: number = 0.7;
 

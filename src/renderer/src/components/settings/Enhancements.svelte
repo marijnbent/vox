@@ -1,30 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { v4 as uuidv4 } from "uuid";
-  import { writable, get, derived } from "svelte/store";
+  import { writable, get } from "svelte/store"; // Removed derived, uuidv4
   import Multiselect from "svelte-multiselect";
   import PromptModal from "./PromptModal.svelte";
   import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt } from "../../../../main/store";
-
-  // Interface for the new system default prompts (fetched from backend)
-  interface SystemPrompt {
-    id: string;
-    name: string;
-    template: string;
-    temperature: number;
-    isFallback?: boolean;
-  }
-
-  type DisplayablePrompt = StoreEnhancementPrompt | SystemPrompt;
-
-  const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
-  const DEFAULT_CONTEXTUAL_FORMATTING_ID = "default_contextual_formatting";
-  const SYSTEM_DEFAULT_PROMPT_IDS = new Set([
+  import {
+    customPrompts,
+    systemPromptCache,
+    allPrompts,
+    initializePrompts,
+    addPrompt as addPromptFromManager,
+    editPrompt as editPromptFromManager,
+    deletePrompt as deletePromptFromManager,
     DEFAULT_CLEAN_TRANSCRIPTION_ID,
     DEFAULT_CONTEXTUAL_FORMATTING_ID,
-  ]);
-
-  const FALLBACK_CUSTOM_PROMPT_TEMPERATURE = 0.7; // For custom prompts if not set
+    SYSTEM_DEFAULT_PROMPT_IDS,
+    FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
+    type DisplayablePrompt,
+    type SystemPrompt,
+  } from "../../lib/promptManager";
 
   const settings = writable<EnhancementSettings>({
     enabled: false,
@@ -46,37 +40,14 @@
   });
 
   let isLoading = true;
-  const customPrompts = writable<StoreEnhancementPrompt[]>([]); // Stores only custom prompts
-  const systemPromptCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
+  // customPrompts and systemPromptCache are now imported from promptManager
 
   // State for the PromptModal
   let showPromptModal = false;
   let modalMode: "view" | "edit" | "add" = "add";
   let currentPrompt: DisplayablePrompt | null = null;
 
-  // Create a new derived store for all prompts, suitable for Multiselect and general listing
-  const allPrompts = derived(
-    [customPrompts, systemPromptCache],
-    ([$customPrompts, $systemPromptsCache]) => {
-      const systemDefaults = Array.from(SYSTEM_DEFAULT_PROMPT_IDS)
-        .map(id => $systemPromptsCache[id])
-        .filter(p => p) as SystemPrompt[];
-      
-      const all: DisplayablePrompt[] = [...systemDefaults, ...$customPrompts.map(p => ({
-        ...p,
-        temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE
-      }))];
-      
-      // Ensure unique prompts by ID, prioritizing system defaults if IDs were to clash (unlikely)
-      const uniquePrompts = new Map<string, DisplayablePrompt>();
-      all.forEach(p => {
-        if (!uniquePrompts.has(p.id)) {
-          uniquePrompts.set(p.id, p);
-        }
-      });
-      return Array.from(uniquePrompts.values());
-    }
-  );
+  // allPrompts is now imported from promptManager
 
   // Type for the objects used by Multiselect options and its selection
   interface MappedPromptOption {
@@ -153,72 +124,29 @@
 
   async function handlePromptModalSave(e: CustomEvent<{ name: string; template: string; temperature: number }>) {
     const { name, template, temperature } = e.detail;
-    if (modalMode === "add") {
-      // Add new prompt
-      const newPrompt: StoreEnhancementPrompt = {
-        id: uuidv4(),
-        name: name.trim(),
-        template: template.trim(),
-        temperature,
-      };
-      const currentPrompts = get(customPrompts);
-      const updatedPrompts = [...currentPrompts, newPrompt];
-      try {
-        await window.api.setStoreValue("enhancementPrompts", updatedPrompts);
-        customPrompts.set(updatedPrompts);
+    try {
+      if (modalMode === "add") {
+        await addPromptFromManager(name, template, temperature);
         showPromptModal = false;
-      } catch (error) {
-        window.api.log("error", "Failed to save new prompt:", error);
-        alert("Failed to save the new prompt.");
-      }
-    } else if (modalMode === "edit" && currentPrompt && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)) {
-      // Edit existing prompt
-      const updatedPrompt: StoreEnhancementPrompt = {
-        id: currentPrompt.id,
-        name: name.trim(),
-        template: template.trim(),
-        temperature,
-      };
-      const currentCustomPrompts = get(customPrompts);
-      const updatedCustomPrompts = currentCustomPrompts.map((p) =>
-        p.id === updatedPrompt.id ? updatedPrompt : p,
-      );
-      try {
-        await window.api.setStoreValue("enhancementPrompts", updatedCustomPrompts);
-        customPrompts.set(updatedCustomPrompts);
+      } else if (modalMode === "edit" && currentPrompt && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)) {
+        await editPromptFromManager(currentPrompt.id, name, template, temperature);
         showPromptModal = false;
-      } catch (error) {
-        window.api.log("error", "Failed to save updated prompt:", error);
-        alert("Failed to save the updated prompt.");
       }
+    } catch (error) {
+      // Error is already logged and alerted by the manager
+      window.api.log("debug", "Prompt save/edit failed at component level, handled by manager.");
     }
   }
 
   onMount(async () => {
+    isLoading = true;
     try {
       const storedSettingsPromise = window.api.getStoreValue("enhancements") as Promise<Partial<EnhancementSettings> | undefined>;
-      const storedPromptsPromise = window.api.getStoreValue("enhancementPrompts") as Promise<Partial<EnhancementPrompt>[] | undefined>;
       
-      const defaultPromptDetailPromises = Array.from(SYSTEM_DEFAULT_PROMPT_IDS).map(id =>
-        window.api.getDefaultPromptDetails(id).catch(err => {
-          window.api.log("error", `Failed to fetch details for default prompt ${id} on mount:`, err);
-          return null; // Allow Promise.all to complete
-        })
-      );
+      // Initialize prompts using the manager
+      await initializePrompts(settings); // Pass settings store if needed by manager, or remove if not
 
-      const [storedSettings, storedPromptsResult, ...fetchedDefaultDetails] =
-        await Promise.all([
-          storedSettingsPromise,
-          storedPromptsPromise,
-          ...defaultPromptDetailPromises
-        ]);
-
-      // Populate systemPromptCache
-      fetchedDefaultDetails.forEach(details => {
-        if (details) {
-          systemPromptCache.update(cache => ({ ...cache, [details.id]: details as SystemPrompt }));
-        }
-      });
+      const storedSettings = await storedSettingsPromise;
 
       if (storedSettings) {
         settings.update((currentDefaults) => {
@@ -242,23 +170,10 @@
         settings.update(s => ({...s, activePromptChain: [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID]}));
       }
 
-
-      if (storedPromptsResult) {
-        const migratedPrompts = storedPromptsResult
-          .filter((p) => p?.id && p.name && p.template) // Basic validation
-          .map((p) => ({
-            id: p!.id!,
-            name: p!.name!,
-            template: p!.template!,
-            temperature: p?.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
-          }));
-        customPrompts.set(migratedPrompts as StoreEnhancementPrompt[]); // Ensure it's StoreEnhancementPrompt[]
-      } else {
-        customPrompts.set([]);
-      }
+      // Prompt loading is handled by initializePrompts
     } catch (error) {
-      window.api.log("error", "Failed to load enhancement settings:", error);
-      customPrompts.set([]);
+      window.api.log("error", "Failed to load enhancement settings or prompts:", error);
+      // customPrompts.set([]); // Managed by promptManager
     } finally {
       isLoading = false;
     }
@@ -285,10 +200,10 @@
     }, 500);
   };
 
-  const deletePrompt = async (idToDelete: string) => {
+  const handleDeletePrompt = async (idToDelete: string) => {
     if (SYSTEM_DEFAULT_PROMPT_IDS.has(idToDelete)) {
       window.api.log("warn", `Attempted to delete system default prompt ID: ${idToDelete}. This is not allowed.`);
-      return; // System defaults cannot be deleted
+      return;
     }
     if (
       !confirm(
@@ -297,37 +212,11 @@
     )
       return;
 
-    const currentPrompts = get(customPrompts);
-    const updatedPrompts = currentPrompts.filter((p) => p.id !== idToDelete);
-    const currentSettings = get(settings);
-    const updatedChain = currentSettings.activePromptChain.filter(
-      (id) => id !== idToDelete,
-    );
-
-    if (updatedChain.length === 0) {
-      // Repopulate with both new defaults if chain becomes empty
-      updatedChain.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
-    }
-
     try {
-      await Promise.all([
-        window.api.setStoreValue("enhancementPrompts", updatedPrompts),
-        window.api.setStoreValue("enhancements", {
-          ...currentSettings,
-          activePromptChain: updatedChain,
-        }),
-      ]);
-
-      customPrompts.set(updatedPrompts);
-      settings.update((s) => ({ ...s, activePromptChain: updatedChain }));
-
-      window.api.log(
-        "info",
-        `Deleted enhancement prompt ID: ${idToDelete} and updated chain.`,
-      );
+      await deletePromptFromManager(idToDelete, settings);
     } catch (error) {
-      window.api.log("error", "Failed to delete prompt:", error);
-      alert("Failed to delete the prompt.");
+      // Error is already logged and alerted by the manager
+       window.api.log("debug", "Prompt deletion failed at component level, handled by manager.");
     }
   };
 </script>
@@ -347,7 +236,7 @@
         <div class="divider py-4">Context Variables</div>
         <!-- ... existing context variables ... -->
 
-        <div class="divider pt-4">Enhancement Prompt Chain</div>
+        <div class="divider py-4">Enhancement Prompt Chain</div>
         <p class="text-sm opacity-70 -mt-4 mb-2">
           Select and order the prompts to run in sequence.
         </p>
@@ -399,7 +288,7 @@
                   class="btn btn-xs btn-ghost text-error"
                   title="Delete Prompt Permanently"
                   aria-label="Delete Prompt Permanently"
-                  on:click={() => deletePrompt(prompt.id)}
+                  on:click={() => handleDeletePrompt(prompt.id)}
                 >
                   <i class="ri-delete-bin-line"></i>
                 </button>
