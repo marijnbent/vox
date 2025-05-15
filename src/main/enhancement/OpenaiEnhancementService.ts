@@ -60,11 +60,10 @@ export class OpenaiEnhancementService implements EnhancementService {
 
   async enhance(
     initialText: string,
-    // promptTemplate: string, // Removed - we use the chain now
     apiKey: string,
     model: string,
     baseURL?: string
-  ): Promise<string> {
+  ): Promise<{ finalText: string; promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }> {
 
     if (!apiKey) {
       logger.error('OpenAI Enhancement Chain: API key is missing.');
@@ -82,57 +81,43 @@ export class OpenaiEnhancementService implements EnhancementService {
 
     if (activeChainIds.length === 0) {
         logger.warn('Enhancement chain is empty. Returning original text.');
-        // This case should ideally be prevented by store defaults, but as a safeguard:
         activeChainIds.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
         logger.info('Defaulting to two-step enhancement chain as active chain was empty.');
     }
 
-    // Ensure default prompts are loaded if constructor hasn't finished or failed silently
     if (this.defaultPrompts.size === 0) {
         logger.warn('Default prompts not initialized, attempting to initialize now.');
         await this.initializeDefaultPrompts();
         if (this.defaultPrompts.size === 0) {
             logger.error('Failed to initialize default prompts. Enhancement may not work as expected.');
-            // Potentially throw an error or return initialText if critical
         }
     }
-    
-    // Create a new promptMap for this enhancement call
-    // Start with the initialized default prompts
-    const promptMap = new Map(this.defaultPrompts);
 
-    // Layer custom prompts on top, potentially overriding defaults if IDs clash (though unlikely with UUIDs for custom)
-    // And apply a default temperature for custom prompts if not specified.
-    const globalDefaultTempForCustom = 0.7; // Or fetch from settings if it becomes configurable
+    const promptMap = new Map(this.defaultPrompts);
+    const globalDefaultTempForCustom = 0.7;
     customPrompts.forEach(p => {
         promptMap.set(p.id, { template: p.template, temperature: p.temperature ?? globalDefaultTempForCustom });
     });
 
-    let currentText = initialText; // Start with the original transcription
+    let currentText = initialText;
+    const promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] = [];
 
     logger.info(`Starting enhancement chain with ${activeChainIds.length} prompts.`);
 
     for (let i = 0; i < activeChainIds.length; i++) {
         const promptId = activeChainIds[i];
-        const promptDetails = promptMap.get(promptId);
+        const promptDetailsEntry = promptMap.get(promptId);
 
-        if (!promptDetails) {
+        if (!promptDetailsEntry) {
             logger.warn(`Prompt ID "${promptId}" not found in map. Skipping step ${i + 1}.`);
             continue;
         }
 
-        logger.info(`Running prompt ${i + 1}/${activeChainIds.length}: ID "${promptId}"`);
-
-        // Prepare context for this specific prompt
         const contextData: { [key: string]: any } = {
-            transcription: initialText, // Always provide the original transcription
-            previous_output: i > 0 ? currentText : initialText // Output of previous step (or initial text for first step)
-            // Note: If the first prompt *only* wants {{transcription}}, it works.
-            // If a later prompt wants {{transcription}}, it gets the original.
-            // If a later prompt wants {{previous_output}}, it gets the chained result.
+            transcription: initialText,
+            previous_output: i > 0 ? currentText : initialText
         };
 
-        // Add other context variables if enabled
         if (enhancementSettings.useContextScreen) {
             contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
         }
@@ -147,38 +132,35 @@ export class OpenaiEnhancementService implements EnhancementService {
             contextData.dictionary_word_list = dictionaryWords.join(', ');
         }
 
-        logger.debug(`Rendering prompt template for step ${i + 1} with context keys:`, Object.keys(contextData));
-        const finalPrompt = Mustache.render(promptDetails.template, contextData);
-        logger.debug(`Final rendered prompt (step ${i + 1}): ${finalPrompt.substring(0, 100)}...`);
+        const finalPrompt = Mustache.render(promptDetailsEntry.template, contextData);
 
         try {
             const completion = await openai.chat.completions.create({
                 messages: [{ role: 'user', content: finalPrompt }],
                 model: model,
-                temperature: promptDetails.temperature, // Use temperature from this specific prompt
-                max_tokens: Math.max(150, currentText.length * 2), // Base on current text length
+                temperature: promptDetailsEntry.temperature,
+                max_tokens: Math.max(150, currentText.length * 2),
             });
 
             const stepResult = completion.choices[0]?.message?.content;
 
             if (stepResult) {
-                logger.info(`Prompt step ${i + 1} successful.`);
-                currentText = stepResult.trim(); // Update currentText for the next iteration
+                currentText = stepResult.trim();
+                promptDetails.push({
+                    promptId,
+                    promptName: promptDetailsEntry.template.substring(0, 20), // Example name logic
+                    renderedPrompt: finalPrompt,
+                    enhancedText: currentText
+                });
             } else {
-                logger.error(`OpenAI Enhancement Step ${i + 1}: Received empty response from API for prompt ID "${promptId}". Stopping chain.`);
-                // Decide whether to throw or return intermediate result
-                // Throwing might be safer to indicate failure.
                 throw new Error(`OpenAI enhancement step ${i + 1} (ID: ${promptId}) returned an empty response.`);
             }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
-            logger.error(`OpenAI Enhancement Step ${i + 1} (ID: ${promptId}) failed:`, error);
-            // Rethrow the error to stop the chain and signal failure
             throw new Error(`OpenAI enhancement step ${i + 1} (ID: ${promptId}) failed: ${message}`);
         }
-    } // End of chain loop
+    }
 
-    logger.info('Enhancement chain completed successfully.');
-    return currentText; // Return the final result after all steps
+    return { finalText: currentText, promptDetails };
   }
 }
