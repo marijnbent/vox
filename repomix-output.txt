@@ -94,11 +94,13 @@ src/
           History.svelte
           Logs.svelte
           Permissions.svelte
+          PromptModal.svelte
           Shortcuts.svelte
           Transcription.svelte
         WaterWaveAnimation.svelte
       lib/
         audioRecorder.ts
+        promptManager.ts
       App.svelte
       env.d.ts
       main.ts
@@ -594,68 +596,49 @@ export class EnhancementManager {
   // The OpenaiEnhancementService now manages the prompt chain internally
   // based on settings.activePromptChain.
 
-  public async enhance(text: string): Promise<string> {
+  public async enhance(text: string): Promise<{ finalText: string; promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }> {
     const settings = store.get('enhancements') as EnhancementSettings;
 
     if (text === '') {
-      logger.warn('EnhancementManager: No text provided for enhancement. Skipping enhancement.');
-      return text;
-    }
-    
-    if (!settings.enabled) {
-      logger.info('Enhancement disabled. Skipping enhancement.');
-      return text;
+        logger.warn('EnhancementManager: No text provided for enhancement. Skipping enhancement.');
+        return { finalText: text, promptDetails: [] };
     }
 
-    // const promptTemplate = this.getActivePromptTemplate(settings); // Removed
+    if (!settings.enabled) {
+        logger.info('Enhancement disabled. Skipping enhancement.');
+        return { finalText: text, promptDetails: [] };
+    }
+
     let apiKey = '';
     let model = '';
     let apiEndpoint: string | undefined = undefined;
 
     switch (settings.provider) {
-      case 'openai':
-        apiKey = settings.openaiApiKey;
-        model = settings.openaiModel;
-        break;
-      case 'gemini':
-        apiKey = settings.geminiApiKey;
-        model = settings.geminiModel;
-        apiEndpoint = "https://generativelanguage.googleapis.com/v1beta/openai/";
-        break;
-      case 'custom':
-        apiKey = settings.customApiKey;
-        model = settings.customModelName;
-        apiEndpoint = settings.customBaseUrl || undefined;
-        break;
-      default:
-        logger.error(`EnhancementManager: Invalid provider "${settings.provider}" encountered.`);
-        return text; 
+        case 'openai':
+            apiKey = settings.openaiApiKey;
+            model = settings.openaiModel;
+            break;
+        case 'gemini':
+            apiKey = settings.geminiApiKey;
+            model = settings.geminiModel;
+            apiEndpoint = "https://generativelanguage.googleapis.com/v1beta/openai/";
+            break;
+        case 'custom':
+            apiKey = settings.customApiKey;
+            model = settings.customModelName;
+            apiEndpoint = settings.customBaseUrl || undefined;
+            break;
+        default:
+            logger.error(`EnhancementManager: Invalid provider "${settings.provider}" encountered.`);
+            return { finalText: text, promptDetails: [] };
     }
 
     if (!apiKey) {
         logger.warn(`EnhancementManager: API key for provider "${settings.provider}" is missing. Skipping enhancement.`);
-        return text;
-    }
-     if (!model) {
-        logger.warn(`EnhancementManager: Model for provider "${settings.provider}" is missing. Skipping enhancement.`);
-        return text;
+        return { finalText: text, promptDetails: [] };
     }
 
-    logger.info(`EnhancementManager: Enhancing text via OpenAI-compatible service using provider "${settings.provider}" settings (Model: "${model}", Endpoint: ${apiEndpoint || 'Default'}).`);
-    try {
-      const enhancedText = await this.enhancementService.enhance(
-          text,
-          // promptTemplate, // Removed
-          apiKey,
-          model,
-          apiEndpoint
-      );
-      logger.info('EnhancementManager: Enhancement successful.');
-      return enhancedText;
-    } catch (error) {
-      logger.error(`EnhancementManager: Error during enhancement using ${settings.provider} settings:`, error);
-      return text;
-    }
+    return this.enhancementService.enhance(text, apiKey, model, apiEndpoint);
   }
 }
 
@@ -669,14 +652,14 @@ export interface EnhancementService {
    * @param apiKey The API key for the service.
    * @param model The specific model to use.
    * @param apiEndpoint Optional endpoint for custom providers.
-   * @returns The enhanced text.
+   * @returns The enhanced text and details of the prompts used.
    */
   enhance(
     text: string,
     apiKey: string,
     model: string,
     apiEndpoint?: string
-  ): Promise<string>;
+  ): Promise<{ finalText: string; promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }>;
 }
 
 ================
@@ -704,6 +687,12 @@ const DEFAULT_CONTEXTUAL_FORMATTING_TEMP = 1.0;
 
 const FALLBACK_CLEAN_TEMPLATE = "Clean this: {{transcription}}";
 const FALLBACK_FORMATTING_TEMPLATE = "Format this: {{previous_output}}";
+
+// Map default prompt IDs to their human-friendly names
+const DEFAULT_PROMPT_NAMES: Record<string, string> = {
+  [DEFAULT_CLEAN_TRANSCRIPTION_ID]: 'Clean Transcription',
+  [DEFAULT_CONTEXTUAL_FORMATTING_ID]: 'Input Formatting'
+};
 
 // Helper function to read prompt file content with fallback
 async function readPromptFileContent(fileName: string, fallbackTemplate: string): Promise<string> {
@@ -744,11 +733,10 @@ export class OpenaiEnhancementService implements EnhancementService {
 
   async enhance(
     initialText: string,
-    // promptTemplate: string, // Removed - we use the chain now
     apiKey: string,
     model: string,
     baseURL?: string
-  ): Promise<string> {
+  ): Promise<{ finalText: string; promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }> {
 
     if (!apiKey) {
       logger.error('OpenAI Enhancement Chain: API key is missing.');
@@ -766,57 +754,45 @@ export class OpenaiEnhancementService implements EnhancementService {
 
     if (activeChainIds.length === 0) {
         logger.warn('Enhancement chain is empty. Returning original text.');
-        // This case should ideally be prevented by store defaults, but as a safeguard:
         activeChainIds.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
         logger.info('Defaulting to two-step enhancement chain as active chain was empty.');
     }
 
-    // Ensure default prompts are loaded if constructor hasn't finished or failed silently
     if (this.defaultPrompts.size === 0) {
         logger.warn('Default prompts not initialized, attempting to initialize now.');
         await this.initializeDefaultPrompts();
         if (this.defaultPrompts.size === 0) {
             logger.error('Failed to initialize default prompts. Enhancement may not work as expected.');
-            // Potentially throw an error or return initialText if critical
         }
     }
-    
-    // Create a new promptMap for this enhancement call
-    // Start with the initialized default prompts
-    const promptMap = new Map(this.defaultPrompts);
 
-    // Layer custom prompts on top, potentially overriding defaults if IDs clash (though unlikely with UUIDs for custom)
-    // And apply a default temperature for custom prompts if not specified.
-    const globalDefaultTempForCustom = 0.7; // Or fetch from settings if it becomes configurable
+    const promptMap = new Map(this.defaultPrompts);
+    const promptNameMap = new Map(Object.entries(DEFAULT_PROMPT_NAMES));
+    const globalDefaultTempForCustom = 0.7;
     customPrompts.forEach(p => {
         promptMap.set(p.id, { template: p.template, temperature: p.temperature ?? globalDefaultTempForCustom });
+        promptNameMap.set(p.id, p.name);
     });
 
-    let currentText = initialText; // Start with the original transcription
+    let currentText = initialText;
+    const promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] = [];
 
     logger.info(`Starting enhancement chain with ${activeChainIds.length} prompts.`);
 
     for (let i = 0; i < activeChainIds.length; i++) {
         const promptId = activeChainIds[i];
-        const promptDetails = promptMap.get(promptId);
+        const promptDetailsEntry = promptMap.get(promptId);
 
-        if (!promptDetails) {
+        if (!promptDetailsEntry) {
             logger.warn(`Prompt ID "${promptId}" not found in map. Skipping step ${i + 1}.`);
             continue;
         }
 
-        logger.info(`Running prompt ${i + 1}/${activeChainIds.length}: ID "${promptId}"`);
-
-        // Prepare context for this specific prompt
         const contextData: { [key: string]: any } = {
-            transcription: initialText, // Always provide the original transcription
-            previous_output: i > 0 ? currentText : initialText // Output of previous step (or initial text for first step)
-            // Note: If the first prompt *only* wants {{transcription}}, it works.
-            // If a later prompt wants {{transcription}}, it gets the original.
-            // If a later prompt wants {{previous_output}}, it gets the chained result.
+            transcription: initialText,
+            previous_output: i > 0 ? currentText : initialText
         };
 
-        // Add other context variables if enabled
         if (enhancementSettings.useContextScreen) {
             contextData.context_screen = "[Screen Content Placeholder - Not Implemented]";
         }
@@ -831,39 +807,37 @@ export class OpenaiEnhancementService implements EnhancementService {
             contextData.dictionary_word_list = dictionaryWords.join(', ');
         }
 
-        logger.debug(`Rendering prompt template for step ${i + 1} with context keys:`, Object.keys(contextData));
-        const finalPrompt = Mustache.render(promptDetails.template, contextData);
-        logger.debug(`Final rendered prompt (step ${i + 1}): ${finalPrompt.substring(0, 100)}...`);
+        const finalPrompt = Mustache.render(promptDetailsEntry.template, contextData);
 
         try {
             const completion = await openai.chat.completions.create({
                 messages: [{ role: 'user', content: finalPrompt }],
                 model: model,
-                temperature: promptDetails.temperature, // Use temperature from this specific prompt
-                max_tokens: Math.max(150, currentText.length * 2), // Base on current text length
+                temperature: promptDetailsEntry.temperature,
+                max_tokens: Math.max(150, currentText.length * 2),
             });
 
             const stepResult = completion.choices[0]?.message?.content;
 
             if (stepResult) {
-                logger.info(`Prompt step ${i + 1} successful.`);
-                currentText = stepResult.trim(); // Update currentText for the next iteration
+                currentText = stepResult.trim();
+                const promptName = promptNameMap.get(promptId) || promptId;
+                promptDetails.push({
+                    promptId,
+                    promptName,
+                    renderedPrompt: finalPrompt,
+                    enhancedText: currentText
+                });
             } else {
-                logger.error(`OpenAI Enhancement Step ${i + 1}: Received empty response from API for prompt ID "${promptId}". Stopping chain.`);
-                // Decide whether to throw or return intermediate result
-                // Throwing might be safer to indicate failure.
                 throw new Error(`OpenAI enhancement step ${i + 1} (ID: ${promptId}) returned an empty response.`);
             }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
-            logger.error(`OpenAI Enhancement Step ${i + 1} (ID: ${promptId}) failed:`, error);
-            // Rethrow the error to stop the chain and signal failure
             throw new Error(`OpenAI enhancement step ${i + 1} (ID: ${promptId}) failed: ${message}`);
         }
-    } // End of chain loop
+    }
 
-    logger.info('Enhancement chain completed successfully.');
-    return currentText; // Return the final result after all steps
+    return { finalText: currentText, promptDetails };
   }
 }
 
@@ -887,10 +861,24 @@ import { getFocusedInputTextWithCursor, type FocusedInputContext } from './macOS
 import type { EnhancementPrompt, EnhancementSettings } from '../store';
 import type { HistoryRecord } from '../historyService';
 
-
-
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
+
+// Default prompt definitions
+const DEFAULT_PROMPTS_CONFIG: Record<string, { name: string; filePath: string; temperature: number; fallbackTemplate: string }> = {
+    "default_clean_transcription": {
+        name: "🧽 Clean Transcription",
+        filePath: "resources/prompt-clean-transcription.txt",
+        temperature: 0.1,
+        fallbackTemplate: ""
+    },
+    "default_contextual_formatting": {
+        name: "✏️ Input Formatting",
+        filePath: "resources/prompt-contextual-formatting.txt",
+        temperature: 1.0,
+        fallbackTemplate: ""
+    }
+};
 
 export function initializeIpcHandlers(dependencies: {
     transcriptionManager: TranscriptionManager;
@@ -910,6 +898,43 @@ export function initializeIpcHandlers(dependencies: {
 let _getProcessingCancelledFlag: () => boolean = () => false;
 let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
 let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
+
+// New transcription handler with enhancement and history details
+async function handleTranscribeAudio(
+  _event: Electron.IpcMainInvokeEvent,
+  audio: { audioData: ArrayBuffer; mimeType: string }
+): Promise<void> {
+  _setProcessingCancelledFlag(false);
+  _sendRecordingStatus('processing');
+  try {
+    if (!transcriptionManager) throw new Error('TranscriptionManager not initialized.');
+    const mainWindow = getMainWindow();
+    if (!mainWindow) throw new Error('Main window not available.');
+
+    const buffer = Buffer.from(audio.audioData);
+    const originalText = await transcriptionManager.transcribe(buffer, audio.mimeType, undefined);
+    let finalText = originalText;
+    let promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string }[] = [];
+
+    const settings = store.get('enhancements') as EnhancementSettings;
+    if (settings.enabled) {
+      const { finalText: enhanced, promptDetails: details } = await enhancementManager.enhance(originalText);
+      finalText = enhanced;
+      promptDetails = details;
+    }
+
+    historyService.addHistoryEntry({ originalText, enhancedText: finalText !== originalText ? finalText : null, promptDetails });
+    sendToMain('transcription-result', finalText);
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('IPC: transcribe-audio failed:', msg);
+    sendToMain('transcription-error', msg);
+    _sendRecordingStatus('error');
+    throw err;
+  } finally {
+    _sendRecordingStatus('idle');
+  }
+}
 
 export function setupIpcHandlers(): void {
     logger.info('Setting up IPC Handlers...');
@@ -980,55 +1005,25 @@ export function setupIpcHandlers(): void {
         sendToWidget('widget-recorder-started');
     });
 
-    // Removed old getDefaultPromptContent handler
-
-    // New handler for specific default prompt details
     ipcMain.handle('getDefaultPromptDetails', async (_event, id: string) => {
-      const DEFAULT_PROMPTS_CONFIG = {
-        "default_clean_transcription": {
-          name: "Default Clean Transcription",
-          filePath: "resources/prompt-clean-transcription.txt",
-          temperature: 0.1,
-          fallbackTemplate: "Clean this: {{transcription}}"
-        },
-        "default_contextual_formatting": {
-          name: "Default Contextual Formatting",
-          filePath: "resources/prompt-contextual-formatting.txt",
-          temperature: 1.0,
-          fallbackTemplate: "Format this: {{previous_output}}"
+        const config = DEFAULT_PROMPTS_CONFIG[id];
+        if (!config) {
+            logger.error(`[IPC] getDefaultPromptDetails: Unknown default prompt ID requested: ${id}`);
+            return null;
         }
-      };
+        try {
+            const basePath = app.isPackaged
+                ? process.resourcesPath
+                : path.join(app.getAppPath());
+            const fullFilePath = path.join(basePath, config.filePath);
 
-      const config = DEFAULT_PROMPTS_CONFIG[id as keyof typeof DEFAULT_PROMPTS_CONFIG];
-      if (!config) {
-        logger.error(`[IPC] getDefaultPromptDetails: Unknown default prompt ID requested: ${id}`);
-        return null;
-      }
-
-      try {
-        const basePath = app.isPackaged
-            ? process.resourcesPath
-            : path.join(app.getAppPath()); // resources subdir is part of config.filePath
-        const fullFilePath = path.join(basePath, config.filePath);
-
-        logger.debug(`[IPC] Attempting to read default prompt file for ID "${id}" from: ${fullFilePath}`);
-        const template = await fs.readFile(fullFilePath, 'utf-8');
-        return {
-          id: id,
-          name: config.name,
-          template: template,
-          temperature: config.temperature
-        };
-      } catch (error) {
-        logger.error(`[IPC] Failed to read default prompt file for ID "${id}" at ${config.filePath}:`, error);
-        return {
-          id: id,
-          name: config.name,
-          template: config.fallbackTemplate,
-          temperature: config.temperature,
-          isFallback: true
-        };
-      }
+            logger.debug(`[IPC] Attempting to read default prompt file for ID "${id}" from: ${fullFilePath}`);
+            const template = await fs.readFile(fullFilePath, 'utf-8');
+            return { id, name: config.name, template, temperature: config.temperature };
+        } catch (error) {
+            logger.error(`[IPC] Failed to read default prompt file for ID "${id}" at ${config.filePath}:`, error);
+            return { id, name: config.name, template: config.fallbackTemplate, temperature: config.temperature, isFallback: true };
+        }
     });
 
     ipcMain.handle('getLogFilePath', () => {
@@ -1088,155 +1083,6 @@ export function setupIpcHandlers(): void {
     });
 
     logger.info('IPC Handlers setup complete.');
-}
-
-async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeType: string }): Promise<void> {
-    _setProcessingCancelledFlag(false);
-    const mainWindow = getMainWindow();
-
-    if (!transcriptionManager) {
-        logger.error('IPC: Cannot transcribe audio, TranscriptionManager not initialized.');
-        _sendRecordingStatus('error');
-        throw new Error('TranscriptionManager not initialized.');
-    }
-    if (!mainWindow) {
-        logger.error('IPC: Cannot transcribe audio, mainWindow is not available.');
-        _sendRecordingStatus('error');
-        throw new Error('Main window not available.');
-    }
-
-    logger.info(`IPC: Received audio data (${audio.audioData.byteLength} bytes, type: ${audio.mimeType}) for transcription.`);
-    _sendRecordingStatus('processing');
-
-    let originalTranscriptionText = '';
-
-    let finalText = '';
-    let enhancementAttempted = false;
-    let finalPromptRendered: string | null = null;
-
-    try {
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape before transcription.');
-            return;
-        }
-
-        const audioBuffer = Buffer.from(audio.audioData);
-        originalTranscriptionText = await transcriptionManager.transcribe(audioBuffer, audio.mimeType, undefined);
-        finalText = originalTranscriptionText;
-        logger.info(`IPC: Transcription successful: "${originalTranscriptionText}"`);
-
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape after transcription.');
-            return;
-        }
-
-        const enhancementSettings = store.get('enhancements') as EnhancementSettings;
-        if (enhancementManager && enhancementSettings.enabled && !_getProcessingCancelledFlag()) {
-            enhancementAttempted = true;
-            try {
-                logger.info('Applying enhancement...');
-                // The enhancementManager.enhance now handles the prompt chain internally.
-                // We don't need to render a single prompt here for history anymore.
-                // The OpenaiEnhancementService logs each step of the chain.
-                // For simplicity in history, we'll set finalPromptRendered to null.
-
-                // const contextData setup and Mustache.render for finalPromptRendered is removed.
-                // If specific context data is still needed by the enhancement service,
-                // it should be passed through or handled within the service itself.
-                // The current OpenaiEnhancementService already has logic for context variables.
-
-                finalPromptRendered = null; // Simplified for history
-
-                const enhancedTextResult = await enhancementManager.enhance(originalTranscriptionText);
-
-                if (enhancedTextResult !== originalTranscriptionText) {
-                     logger.info(`IPC: Enhancement successful: "${enhancedTextResult}"`);
-                     finalText = enhancedTextResult;
-                 } else {
-                     logger.info('Enhancement did not modify the text.');
-                 }
-            } catch (enhancementError) {
-                logger.error('Enhancement step failed:', enhancementError);
-                finalPromptRendered = null;
-            }
-        } else if (_getProcessingCancelledFlag()) {
-             logger.info('Enhancement skipped due to cancellation.');
-        } else {
-            logger.info('Enhancement disabled or provider is none, skipping.');
-        }
-
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape before history/paste.');
-            return;
-        }
-
-        try {
-            let promptIdForHistory: string | null = null; // Simplified for history
-            if (enhancementAttempted) {
-                // Optionally, store the chain as a string or just the first prompt ID
-                // For now, keeping it simple as null, as the service logs details.
-                // promptIdForHistory = enhancementSettings.activePromptChain.join(', ');
-            }
-            const historyEntryData: Omit<HistoryRecord, 'id' | 'timestamp'> = {
-                originalText: originalTranscriptionText,
-                renderedPrompt: finalPromptRendered, // Now null
-                enhancedText: finalText !== originalTranscriptionText ? finalText : null,
-                promptIdUsed: promptIdForHistory // Now null
-            };
-            historyService.addHistoryEntry(historyEntryData);
-        } catch(historyError) {
-             logger.error('Failed to save transcription to history:', historyError);
-        }
-
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape before sending result/pasting.');
-            return;
-        }
-
-        sendToMain('transcription-result', finalText);
-        _sendRecordingStatus('idle');
-
-        if (store.get('settings.autoPaste', true) && !_getProcessingCancelledFlag()) {
-           logger.info('Auto-paste enabled, writing to clipboard and simulating paste...');
-           clipboard.writeText(finalText);
-           if (process.platform === 'darwin') {
-              const appleScript = `
-                tell application "System Events"
-                  keystroke "v" using command down
-                end tell
-              `;
-              exec(`osascript -e '${appleScript}'`, (error) => {
-                if (error) {
-                  logger.error('Failed to execute paste AppleScript:', error);
-                  sendToMain('transcription-error', 'Transcription complete, but failed to paste.');
-                } else {
-                  logger.info('Paste simulated via AppleScript.');
-                }
-              });
-           } else {
-              logger.warn('Auto-paste simulation not implemented for this platform.');
-              sendToMain('transcription-error', 'Transcription complete, but auto-paste not supported on this OS.');
-           }
-        } else if (_getProcessingCancelledFlag()) {
-            logger.info('Paste skipped due to cancellation.');
-        } else {
-            logger.info('Auto-paste disabled, skipping paste action.');
-        }
-
-    } catch (error: unknown) {
-        if (_getProcessingCancelledFlag()) {
-            logger.info('Processing cancelled by Escape during error handling.');
-            if (mainProcessRecordingStatus !== 'idle') {
-                _sendRecordingStatus('idle');
-            }
-            return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error('IPC: Transcription failed:', message);
-        sendToMain('transcription-error', message);
-        _sendRecordingStatus('error');
-        throw error;
-    }
 }
 
 function handleGetAccessibilityStatus() {
@@ -2178,16 +2024,14 @@ import path from 'path';
 import { app } from 'electron';
 import fs from 'fs';
 import { logger } from './logger';
-import store, { type EnhancementPrompt } from './store';
 
 export interface HistoryRecord {
   id: string;
   timestamp: number;
   originalText: string;
-  renderedPrompt: string | null;
   enhancedText: string | null;
-  promptIdUsed: string | null;
-  promptNameUsed?: string | null;
+  promptChainUsed?: string[] | null; // New field to store the chain of prompts used
+  promptDetails?: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[]; // New field for detailed prompt information
 }
 
 export interface PaginatedHistory {
@@ -2217,6 +2061,7 @@ try {
     logger.error('Failed to initialize database:', error);
 }
 
+// Removed unused fields from the history table schema and ensured promptDetails is always an array.
 function initializeSchema(): void {
     if (!db) return;
     try {
@@ -2225,19 +2070,22 @@ function initializeSchema(): void {
                 id TEXT PRIMARY KEY,
                 timestamp INTEGER NOT NULL,
                 originalText TEXT NOT NULL,
-                renderedPrompt TEXT,
-                enhancedText TEXT,
-                promptIdUsed TEXT
+                enhancedText TEXT
             );
         `);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history (timestamp);`);
 
-        const columns = db.pragma('table_info(history)');
-        const hasRenderedPrompt = columns.some((col: any) => col.name === 'renderedPrompt');
-        if (!hasRenderedPrompt) {
-            db.exec('ALTER TABLE history ADD COLUMN renderedPrompt TEXT;');
-            logger.info('Added renderedPrompt column to history table.');
-        }
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS prompt_details (
+                historyId TEXT NOT NULL,
+                promptId TEXT NOT NULL,
+                promptName TEXT NOT NULL,
+                renderedPrompt TEXT,
+                enhancedText TEXT,
+                PRIMARY KEY (historyId, promptId),
+                FOREIGN KEY (historyId) REFERENCES history(id) ON DELETE CASCADE
+            );
+        `);
 
         logger.info('Database schema initialized successfully.');
     } catch (error) {
@@ -2247,73 +2095,75 @@ function initializeSchema(): void {
 
 initializeSchema();
 
-export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'>): void {
-    if (!db) {
-        logger.error('Cannot add history entry: Database not initialized.');
-        return;
-    }
+export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'> & { promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }): void {
+    if (!db) return;
+
     const timestamp = Date.now();
-    const id = `${timestamp}-${Math.random().toString(36).substring(2, 8)}`;
-    const sql = `
-        INSERT INTO history (id, timestamp, originalText, renderedPrompt, enhancedText, promptIdUsed)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `;
+    const id = `${timestamp}-${Math.random().toString(36).substr(2, 9)}`;
+
+    const promptDetails = entry.promptDetails || []; // Ensure promptDetails is always an array
+
+    const insertHistoryStmt = db.prepare(`
+        INSERT INTO history (id, timestamp, originalText, enhancedText)
+        VALUES (?, ?, ?, ?)
+    `);
+
+    const insertPromptDetailsStmt = db.prepare(`
+        INSERT INTO prompt_details (historyId, promptId, promptName, renderedPrompt, enhancedText)
+        VALUES (?, ?, ?, ?, ?)
+    `);
+
+    const transaction = db.transaction(() => {
+        insertHistoryStmt.run(id, timestamp, entry.originalText, entry.enhancedText);
+
+        for (const detail of promptDetails) {
+            insertPromptDetailsStmt.run(id, detail.promptId, detail.promptName, detail.renderedPrompt, detail.enhancedText);
+        }
+    });
+
     try {
-        const stmt = db.prepare(sql);
-        stmt.run(
-            id,
-            timestamp,
-            entry.originalText,
-            entry.renderedPrompt ?? null,
-            entry.enhancedText ?? null,
-            entry.promptIdUsed ?? null
-        );
-        logger.info(`Added history entry: ${id}`);
+        transaction();
+        logger.info(`History entry added with ID: ${id}`);
     } catch (error) {
         logger.error('Failed to add history entry:', error);
     }
 }
 
 export function getHistoryEntries(page = 1, pageSize = 10): PaginatedHistory | null {
-     if (!db) {
-        logger.error('Cannot get history entries: Database not initialized.');
-        return null;
-    }
+    if (!db) return null;
+
+    const offset = (page - 1) * pageSize;
+
+    const historyStmt = db.prepare(`
+        SELECT id, timestamp, originalText, enhancedText
+        FROM history
+        ORDER BY timestamp DESC
+        LIMIT ? OFFSET ?
+    `);
+
+    const promptDetailsStmt = db.prepare(`
+        SELECT promptId, promptName, renderedPrompt, enhancedText
+        FROM prompt_details
+        WHERE historyId = ?
+    `);
+
     try {
-        const countResult = db.prepare('SELECT COUNT(*) as count FROM history').get() as { count: number };
-        const totalEntries = countResult.count;
-        const totalPages = Math.ceil(totalEntries / pageSize);
-        const currentPage = Math.max(1, Math.min(page, totalPages));
-        const offset = (currentPage - 1) * pageSize;
-
-        const sql = `
-            SELECT * FROM history
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-        `;
-        const stmt = db.prepare(sql);
-        let entries = stmt.all(pageSize, offset) as HistoryRecord[];
-
-        const prompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
-        const promptMap = new Map(prompts.map(p => [p.id, p.name]));
-
-        entries = entries.map(entry => {
-            let promptName: string | null = null;
-            if (entry.promptIdUsed === 'default') {
-                promptName = 'Default Prompt';
-            } else if (entry.promptIdUsed) {
-                promptName = promptMap.get(entry.promptIdUsed) ?? 'Deleted Prompt';
-            }
-            return { ...entry, promptNameUsed: promptName };
+        const entries = historyStmt.all(pageSize, offset).map((history: any) => {
+            const details = promptDetailsStmt.all(history.id);
+            return {
+                ...history,
+                promptDetails: details
+            };
         });
 
-        logger.info(`Fetched history page ${currentPage}/${totalPages} (${entries.length} entries with prompt names)`);
+        const totalEntries = db.prepare('SELECT COUNT(*) AS count FROM history').get().count;
+        const totalPages = Math.ceil(totalEntries / pageSize);
 
         return {
             entries,
             totalEntries,
             totalPages,
-            currentPage,
+            currentPage: page
         };
     } catch (error) {
         logger.error('Failed to fetch history entries:', error);
@@ -3442,59 +3292,28 @@ File: src/renderer/src/components/settings/Enhancements.svelte
 ================
 <script lang="ts">
   import { onMount } from "svelte";
-  import { v4 as uuidv4 } from "uuid";
-  import { writable, get, derived } from "svelte/store";
+  import { writable, get } from "svelte/store"; // Removed derived, uuidv4
   import Multiselect from "svelte-multiselect";
-
-  interface EnhancementSettings {
-    enabled: boolean;
-    provider: "openai" | "gemini" | "custom";
-    openaiApiKey: string;
-    openaiModel: "gpt-4.1" | "gpt-4.1-mini";
-    openaiBaseUrl?: string;
-    geminiApiKey: string;
-    geminiModel:
-      | "gemini-2.0-flash"
-      | "gemini-2.5-flash"
-      | "gemini-2.0-flash-lite";
-    customApiKey: string;
-    customModelName: string;
-    customBaseUrl?: string;
-    activePromptChain: string[];
-    useTranscript: boolean;
-    useContextScreen: boolean;
-    useContextInputField: boolean;
-    useContextClipboard: boolean;
-    useDictionaryWordList: boolean;
-  }
-
-  interface EnhancementPrompt { // For user-created prompts
-    id: string;
-    name: string;
-    template: string;
-    temperature: number;
-  }
-
-  // Interface for the new system default prompts (fetched from backend)
-  interface SystemPrompt {
-    id: string; // e.g., "default_clean_transcription"
-    name: string; // e.g., "Default Clean Transcription"
-    template: string;
-    temperature: number;
-    isFallback?: boolean; // Optional: indicates if the template is a fallback
-  }
-
-  // Type for items in DND lists and modals
-  type DisplayablePrompt = EnhancementPrompt | SystemPrompt;
-
-  const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
-  const DEFAULT_CONTEXTUAL_FORMATTING_ID = "default_contextual_formatting";
-  const SYSTEM_DEFAULT_PROMPT_IDS = new Set([
+  import PromptModal from "./PromptModal.svelte";
+  import type {
+    EnhancementSettings,
+    EnhancementPrompt as StoreEnhancementPrompt,
+  } from "../../../../main/store";
+  import {
+    customPrompts,
+    systemPromptCache,
+    allPrompts,
+    initializePrompts,
+    addPrompt as addPromptFromManager,
+    editPrompt as editPromptFromManager,
+    deletePrompt as deletePromptFromManager,
     DEFAULT_CLEAN_TRANSCRIPTION_ID,
     DEFAULT_CONTEXTUAL_FORMATTING_ID,
-  ]);
-
-  const FALLBACK_CUSTOM_PROMPT_TEMPERATURE = 0.7; // For custom prompts if not set
+    SYSTEM_DEFAULT_PROMPT_IDS,
+    FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
+    type DisplayablePrompt,
+    type SystemPrompt,
+  } from "../../lib/promptManager";
 
   const settings = writable<EnhancementSettings>({
     enabled: false,
@@ -3507,7 +3326,10 @@ File: src/renderer/src/components/settings/Enhancements.svelte
     customApiKey: "",
     customModelName: "",
     customBaseUrl: "",
-    activePromptChain: [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID], // Updated default
+    activePromptChain: [
+      DEFAULT_CLEAN_TRANSCRIPTION_ID,
+      DEFAULT_CONTEXTUAL_FORMATTING_ID,
+    ], // Updated default
     useTranscript: true,
     useContextScreen: false,
     useContextInputField: false,
@@ -3516,110 +3338,265 @@ File: src/renderer/src/components/settings/Enhancements.svelte
   });
 
   let isLoading = true;
-  const prompts = writable<EnhancementPrompt[]>([]); // Stores only custom prompts
-  const systemPromptDetailsCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
+  // customPrompts and systemPromptCache are now imported from promptManager
 
-  let newPromptName = "";
-  let newPromptTemplate = "";
-  let newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-  let showAddPrompt = false;
+  // State for the PromptModal
   let showPromptModal = false;
   let modalMode: "view" | "edit" | "add" = "add";
   let currentPrompt: DisplayablePrompt | null = null;
-  let editPromptName = "";
-  let editPromptTemplate = "";
-  let editPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
 
-  // const dndOptions = { ... }; // Removed
-  // let defaultPromptContent = ""; // Removed
+  // allPrompts is now imported from promptManager
 
-  // Removed activeChainPrompts and availablePrompts derived stores
+  // Type for the objects used by Multiselect options and its selection
+  interface MappedPromptOption {
+    value: string; // Prompt ID
+    label: string; // Prompt Name
+    original: DisplayablePrompt; // The full prompt object
+  }
 
-  // Create a new derived store for all prompts, suitable for Multiselect and general listing
-  const allDisplayablePrompts = derived(
-    [prompts, systemPromptDetailsCache],
-    ([$customPrompts, $systemPromptsCache]) => {
-      const systemDefaults = Array.from(SYSTEM_DEFAULT_PROMPT_IDS)
-        .map(id => $systemPromptsCache[id])
-        .filter(p => p) as SystemPrompt[];
-      
-      const allPrompts: DisplayablePrompt[] = [...systemDefaults, ...$customPrompts.map(p => ({
-        ...p,
-        temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE
-      }))];
-      
-      // Ensure unique prompts by ID, prioritizing system defaults if IDs were to clash (unlikely)
-      const uniquePrompts = new Map<string, DisplayablePrompt>();
-      allPrompts.forEach(p => {
-        if (!uniquePrompts.has(p.id)) {
-          uniquePrompts.set(p.id, p);
-        }
-      });
-      return Array.from(uniquePrompts.values());
-    }
-  );
-  
-  // This will hold the prompt *objects* selected in the Multiselect
-  // It needs to be initialized based on the IDs in $settings.activePromptChain
-  let selectedPromptObjects: DisplayablePrompt[] = [];
+  // This will hold the MappedPromptOption objects selected in the Multiselect
+  let selectedMappedOptions: MappedPromptOption[] = [];
 
-  // Reactive statement to update selectedPromptObjects when $settings.activePromptChain or $allDisplayablePrompts changes
+  // Create a stable list of options for the Multiselect component.
+  // This helps ensure referential integrity if the component relies on it.
+  let multiselectComponentOptions: MappedPromptOption[] = [];
+  $: multiselectComponentOptions = $allPrompts.map((p) => ({
+    value: p.id,
+    label: p.name,
+    original: p,
+  }));
+
+  // Reactive statement to synchronize `selectedMappedOptions` with `$settings.activePromptChain`
+  // and the `multiselectComponentOptions`. This is crucial for `bind:selected` to work correctly.
   $: {
-    if ($settings && $allDisplayablePrompts) {
-      const currentActiveChainIds = $settings.activePromptChain;
-      selectedPromptObjects = currentActiveChainIds
-        .map(id => $allDisplayablePrompts.find(p => p.id === id))
-        .filter(p => p !== undefined) as DisplayablePrompt[];
+    if (
+      $settings &&
+      Array.isArray($settings.activePromptChain) &&
+      multiselectComponentOptions.length > 0
+    ) {
+      const optionsMap = new Map(
+        multiselectComponentOptions.map((opt) => [opt.value, opt]),
+      );
+      const newSelectedOptions: MappedPromptOption[] = [];
+
+      for (const id of $settings.activePromptChain) {
+        const mappedOption = optionsMap.get(id); // Get the option object by reference
+        if (mappedOption) {
+          newSelectedOptions.push(mappedOption);
+        } else {
+          window.api.log(
+            "warn",
+            `Prompt ID "${id}" in activePromptChain not found in multiselectComponentOptions.`,
+          );
+        }
+      }
+
+      // Only update if the selection has genuinely changed to avoid reactivity loops.
+      if (
+        selectedMappedOptions.length !== newSelectedOptions.length ||
+        selectedMappedOptions.some(
+          (opt, index) => opt.value !== newSelectedOptions[index]?.value,
+        )
+      ) {
+        selectedMappedOptions = newSelectedOptions;
+      }
+    } else if (
+      $settings &&
+      $settings.activePromptChain &&
+      $settings.activePromptChain.length === 0
+    ) {
+      // If activePromptChain is empty, ensure selectedMappedOptions is also empty.
+      if (selectedMappedOptions.length !== 0) {
+        selectedMappedOptions = [];
+      }
+    } else if (
+      multiselectComponentOptions.length === 0 &&
+      $settings?.activePromptChain?.length > 0
+    ) {
+      // If options are not loaded yet but there's an active chain, selection should be empty.
+      if (selectedMappedOptions.length !== 0) {
+        selectedMappedOptions = [];
+      }
     }
   }
 
   // Function to update $settings.activePromptChain when Multiselect changes
-  // The event detail from svelte-multiselect usually gives the full selected objects
-  const handleMultiselectChange = (event: CustomEvent<{items: DisplayablePrompt[]}>) => {
-    const newSelectedPromptObjects = event.detail.items || [];
-    settings.update(s => ({
-      ...s,
-      activePromptChain: newSelectedPromptObjects.map(p => p.id)
-    }));
+
+  // Define event detail types for clarity, matching svelte-multiselect documentation
+  interface MultiselectChangeEventDetailAdd {
+    type: "add";
+    option: MappedPromptOption;
+  }
+  interface MultiselectChangeEventDetailRemove {
+    type: "remove";
+    option: MappedPromptOption;
+  }
+  interface MultiselectChangeEventDetailRemoveAll {
+    type: "removeAll";
+    options: MappedPromptOption[]; // These are the options that *were* selected
+  }
+
+  type MultiselectChangeEventDetail =
+    | MultiselectChangeEventDetailAdd
+    | MultiselectChangeEventDetailRemove
+    | MultiselectChangeEventDetailRemoveAll;
+
+  const handleMultiselectChange = (
+    event: CustomEvent<MultiselectChangeEventDetail>,
+  ) => {
+    const detail = event.detail;
+    const currentChain = get(settings).activePromptChain;
+    let newActiveChainIds: string[];
+
+    if (detail.type === "add") {
+      // Add the new prompt's ID if it's not already in the chain.
+      // svelte-multiselect handles the visual addition; we update our source of truth.
+      // It typically appends, so we replicate that.
+      if (!currentChain.includes(detail.option.value)) {
+        newActiveChainIds = [...currentChain, detail.option.value];
+      } else {
+        // If the prompt is already in the chain, and component somehow allowed adding again,
+        // we keep the chain as is to avoid duplicate IDs in our store.
+        newActiveChainIds = [...currentChain];
+        window.api.log(
+          "debug",
+          `Prompt "${detail.option.label}" already in chain during 'add' event.`,
+        );
+      }
+    } else if (detail.type === "remove") {
+      newActiveChainIds = currentChain.filter(
+        (id) => id !== detail.option.value,
+      );
+    } else if (detail.type === "removeAll") {
+      newActiveChainIds = [];
+    } else {
+      // This case should ideally not be reached if event types are constrained.
+      window.api.log(
+        "error",
+        `Unknown multiselect change event detail: ${JSON.stringify(detail)}`,
+      );
+      return; // Do not update if the event is not understood.
+    }
+
+    // Only update the store if the chain has actually changed to prevent unnecessary reactivity.
+    if (JSON.stringify(currentChain) !== JSON.stringify(newActiveChainIds)) {
+      settings.update((s) => ({
+        ...s,
+        activePromptChain: newActiveChainIds,
+      }));
+    }
+    // The reactive block `$: { ... }` (lines 69-101) will derive selectedMappedOptions
+    // from the updated $settings.activePromptChain, which then updates the `selected` prop of the Multiselect.
   };
 
+  // Helper to open modal for view/edit/add
+  function openPromptModalWrapper(promptId?: string) {
+    if (!promptId) {
+      modalMode = "add";
+      currentPrompt = null;
+      showPromptModal = true;
+      return;
+    }
+    let foundPrompt: DisplayablePrompt | null = null;
+    let effectiveMode: "view" | "edit" = "edit";
+    if (SYSTEM_DEFAULT_PROMPT_IDS.has(promptId)) {
+      const details = get(systemPromptCache)[promptId];
+      if (details) {
+        foundPrompt = details as SystemPrompt;
+        effectiveMode = "view";
+      }
+    } else {
+      const customPrompt = get(customPrompts).find((p) => p.id === promptId);
+      if (customPrompt) {
+        foundPrompt = {
+          ...customPrompt,
+          temperature:
+            customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
+        };
+        effectiveMode = "edit";
+      }
+    }
+    if (foundPrompt) {
+      currentPrompt = foundPrompt;
+      modalMode = effectiveMode;
+      showPromptModal = true;
+    }
+  }
+
+  function handlePromptModalClose() {
+    showPromptModal = false;
+    currentPrompt = null;
+  }
+
+  async function handlePromptModalSave(
+    e: CustomEvent<{ name: string; template: string; temperature: number }>,
+  ) {
+    const { name, template, temperature } = e.detail;
+    try {
+      if (modalMode === "add") {
+        await addPromptFromManager(name, template, temperature);
+        showPromptModal = false;
+      } else if (
+        modalMode === "edit" &&
+        currentPrompt &&
+        !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)
+      ) {
+        await editPromptFromManager(
+          currentPrompt.id,
+          name,
+          template,
+          temperature,
+        );
+        showPromptModal = false;
+      }
+    } catch (error) {
+      // Error is already logged and alerted by the manager
+      window.api.log(
+        "debug",
+        "Prompt save/edit failed at component level, handled by manager.",
+      );
+    }
+  }
 
   onMount(async () => {
+    isLoading = true;
     try {
-      const storedSettingsPromise = window.api.getStoreValue("enhancements") as Promise<Partial<EnhancementSettings> | undefined>;
-      const storedPromptsPromise = window.api.getStoreValue("enhancementPrompts") as Promise<Partial<EnhancementPrompt>[] | undefined>;
-      
-      const defaultPromptDetailPromises = Array.from(SYSTEM_DEFAULT_PROMPT_IDS).map(id =>
-        window.api.getDefaultPromptDetails(id).catch(err => {
-          window.api.log("error", `Failed to fetch details for default prompt ${id} on mount:`, err);
-          return null; // Allow Promise.all to complete
-        })
-      );
+      const storedSettingsPromise = window.api.getStoreValue(
+        "enhancements",
+      ) as Promise<Partial<EnhancementSettings> | undefined>;
 
-      const [storedSettings, storedPromptsResult, ...fetchedDefaultDetails] =
-        await Promise.all([
-          storedSettingsPromise,
-          storedPromptsPromise,
-          ...defaultPromptDetailPromises
-        ]);
+      // Initialize prompts using the manager
+      await initializePrompts(settings); // Pass settings store if needed by manager, or remove if not
 
-      // Populate systemPromptDetailsCache
-      fetchedDefaultDetails.forEach(details => {
-        if (details) {
-          systemPromptDetailsCache.update(cache => ({ ...cache, [details.id]: details as SystemPrompt }));
-        }
-      });
+      const storedSettings = await storedSettingsPromise;
 
       if (storedSettings) {
         settings.update((currentDefaults) => {
           let chain = storedSettings.activePromptChain;
-          const isOldDefault = Array.isArray(chain) && chain.length === 1 && chain[0] === "default";
-          const isPartialNewDefault = Array.isArray(chain) && chain.length === 1 &&
-                                    (chain[0] === DEFAULT_CLEAN_TRANSCRIPTION_ID || chain[0] === DEFAULT_CONTEXTUAL_FORMATTING_ID);
+          const isOldDefault =
+            Array.isArray(chain) &&
+            chain.length === 1 &&
+            chain[0] === "default";
+          const isPartialNewDefault =
+            Array.isArray(chain) &&
+            chain.length === 1 &&
+            (chain[0] === DEFAULT_CLEAN_TRANSCRIPTION_ID ||
+              chain[0] === DEFAULT_CONTEXTUAL_FORMATTING_ID);
 
-          if (!Array.isArray(chain) || chain.length === 0 || isOldDefault || isPartialNewDefault) {
-            chain = [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID];
-            window.api.log("info", "Migrating activePromptChain to new two-item default.");
+          if (
+            !Array.isArray(chain) ||
+            chain.length === 0 ||
+            isOldDefault ||
+            isPartialNewDefault
+          ) {
+            chain = [
+              DEFAULT_CLEAN_TRANSCRIPTION_ID,
+              DEFAULT_CONTEXTUAL_FORMATTING_ID,
+            ];
+            window.api.log(
+              "info",
+              "Migrating activePromptChain to new two-item default.",
+            );
           }
           return {
             ...currentDefaults,
@@ -3628,27 +3605,24 @@ File: src/renderer/src/components/settings/Enhancements.svelte
           };
         });
       } else {
-         // Ensure default chain is set if no settings are stored
-        settings.update(s => ({...s, activePromptChain: [DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID]}));
+        // Ensure default chain is set if no settings are stored
+        settings.update((s) => ({
+          ...s,
+          activePromptChain: [
+            DEFAULT_CLEAN_TRANSCRIPTION_ID,
+            DEFAULT_CONTEXTUAL_FORMATTING_ID,
+          ],
+        }));
       }
 
-
-      if (storedPromptsResult) {
-        const migratedPrompts = storedPromptsResult
-          .filter((p) => p?.id && p.name && p.template) // Basic validation
-          .map((p) => ({
-            id: p!.id!,
-            name: p!.name!,
-            template: p!.template!,
-            temperature: p?.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
-          }));
-        prompts.set(migratedPrompts as EnhancementPrompt[]); // Ensure it's EnhancementPrompt[]
-      } else {
-        prompts.set([]);
-      }
+      // Prompt loading is handled by initializePrompts
     } catch (error) {
-      window.api.log("error", "Failed to load enhancement settings:", error);
-      prompts.set([]);
+      window.api.log(
+        "error",
+        "Failed to load enhancement settings or prompts:",
+        error,
+      );
+      // customPrompts.set([]); // Managed by promptManager
     } finally {
       isLoading = false;
     }
@@ -3675,37 +3649,13 @@ File: src/renderer/src/components/settings/Enhancements.svelte
     }, 500);
   };
 
-  const addPrompt = async () => {
-    if (!newPromptName.trim() || !newPromptTemplate.trim()) {
-      alert("Please provide both a name and a template for the new prompt.");
-      return;
-    }
-    const newPrompt: EnhancementPrompt = {
-      id: uuidv4(),
-      name: newPromptName.trim(),
-      template: newPromptTemplate.trim(),
-      temperature: newPromptTemperature, // This is EnhancementPrompt
-    };
-    const currentPrompts = get(prompts);
-    const updatedPrompts = [...currentPrompts, newPrompt];
-    try {
-      await window.api.setStoreValue("enhancementPrompts", updatedPrompts);
-      prompts.set(updatedPrompts);
-      newPromptName = "";
-      newPromptTemplate = "";
-      newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-      showAddPrompt = false;
-      window.api.log("info", `Added new enhancement prompt: ${newPrompt.name}`);
-    } catch (error) {
-      window.api.log("error", "Failed to save new prompt:", error);
-      alert("Failed to save the new prompt.");
-    }
-  };
-
-  const deletePrompt = async (idToDelete: string) => {
+  const handleDeletePrompt = async (idToDelete: string) => {
     if (SYSTEM_DEFAULT_PROMPT_IDS.has(idToDelete)) {
-      window.api.log("warn", `Attempted to delete system default prompt ID: ${idToDelete}. This is not allowed.`);
-      return; // System defaults cannot be deleted
+      window.api.log(
+        "warn",
+        `Attempted to delete system default prompt ID: ${idToDelete}. This is not allowed.`,
+      );
+      return;
     }
     if (
       !confirm(
@@ -3714,125 +3664,16 @@ File: src/renderer/src/components/settings/Enhancements.svelte
     )
       return;
 
-    const currentPrompts = get(prompts);
-    const updatedPrompts = currentPrompts.filter((p) => p.id !== idToDelete);
-    const currentSettings = get(settings);
-    const updatedChain = currentSettings.activePromptChain.filter(
-      (id) => id !== idToDelete,
-    );
-
-    if (updatedChain.length === 0) {
-      // Repopulate with both new defaults if chain becomes empty
-      updatedChain.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
-    }
-
     try {
-      await Promise.all([
-        window.api.setStoreValue("enhancementPrompts", updatedPrompts),
-        window.api.setStoreValue("enhancements", {
-          ...currentSettings,
-          activePromptChain: updatedChain,
-        }),
-      ]);
-
-      prompts.set(updatedPrompts);
-      settings.update((s) => ({ ...s, activePromptChain: updatedChain }));
-
+      await deletePromptFromManager(idToDelete, settings);
+    } catch (error) {
+      // Error is already logged and alerted by the manager
       window.api.log(
-        "info",
-        `Deleted enhancement prompt ID: ${idToDelete} and updated chain.`,
+        "debug",
+        "Prompt deletion failed at component level, handled by manager.",
       );
-    } catch (error) {
-      window.api.log("error", "Failed to delete prompt:", error);
-      alert("Failed to delete the prompt.");
     }
   };
-
-  const closeModal = () => {
-    showPromptModal = false;
-    currentPrompt = null;
-    editPromptName = "";
-    editPromptTemplate = "";
-  };
-
-  const openPromptModal = async (promptId: string) => {
-    let foundPrompt: DisplayablePrompt | null = null;
-    let effectiveMode: "view" | "edit" = "edit";
-
-    if (SYSTEM_DEFAULT_PROMPT_IDS.has(promptId)) {
-      const details = get(systemPromptDetailsCache)[promptId] || await window.api.getDefaultPromptDetails(promptId);
-      if (details) {
-        // Ensure details are in cache if fetched now
-        if (!get(systemPromptDetailsCache)[promptId] && details) {
-            systemPromptDetailsCache.update(cache => ({...cache, [promptId]: details as SystemPrompt}));
-        }
-        foundPrompt = details as SystemPrompt;
-        effectiveMode = "view"; // System defaults are always view-only
-      } else {
-        window.api.log("error", `Default prompt details not found for ID: ${promptId}`);
-        alert(`Details for default prompt "${promptId}" not available.`);
-        return;
-      }
-    } else {
-      // Custom prompt
-      const customPrompt = get(prompts).find((p) => p.id === promptId);
-      if (customPrompt) {
-        foundPrompt = {
-          ...customPrompt,
-          temperature: customPrompt.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
-        };
-        effectiveMode = "edit";
-      }
-    }
-
-    if (foundPrompt) {
-      currentPrompt = foundPrompt;
-      modalMode = effectiveMode;
-      editPromptName = foundPrompt.name;
-      editPromptTemplate = foundPrompt.template;
-      editPromptTemperature = foundPrompt.temperature;
-      showPromptModal = true;
-    } else {
-      window.api.log("error", `Prompt not found for ID: ${promptId}`);
-    }
-  };
-
-  const saveEditedPrompt = async () => {
-    if (!currentPrompt || SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)) {
-      // Should not happen if UI is correct, but as a safeguard
-      window.api.log("warn", "Attempted to save a system default prompt or no current prompt.");
-      return;
-    }
-    if (!editPromptName.trim() || !editPromptTemplate.trim()) {
-      alert("Prompt name and template cannot be empty.");
-      return;
-    }
-
-    // currentPrompt here is guaranteed to be an EnhancementPrompt (custom)
-    const updatedPrompt: EnhancementPrompt = {
-      id: currentPrompt.id, // Keep original ID
-      name: editPromptName.trim(),
-      template: editPromptTemplate.trim(),
-      temperature: editPromptTemperature,
-    };
-
-    const currentCustomPrompts = get(prompts);
-    const updatedCustomPrompts = currentCustomPrompts.map((p) =>
-      p.id === updatedPrompt.id ? updatedPrompt : p,
-    );
-
-    try {
-      await window.api.setStoreValue("enhancementPrompts", updatedCustomPrompts);
-      prompts.set(updatedCustomPrompts);
-      window.api.log("info", `Updated prompt: ${updatedPrompt.name}`);
-      closeModal();
-    } catch (error) {
-      window.api.log("error", "Failed to save updated prompt:", error);
-      alert("Failed to save the updated prompt.");
-    }
-  };
-
-  // Removed handleChainSort and handleAddAvailableToSort functions
 </script>
 
 <div class="p-4 space-y-6">
@@ -3842,59 +3683,253 @@ File: src/renderer/src/components/settings/Enhancements.svelte
     <p>Loading settings...</p>
   {:else}
     <div class="bg-base-100 max-w-2xl space-y-6">
-      <!-- ... existing form controls ... -->
+      <div class="form-control">
+        <label class="label cursor-pointer" for="enable-enhancements-toggle">
+          <span class="label-text font-semibold">Enable Enhancements</span>
+          <input
+            type="checkbox"
+            id="enable-enhancements-toggle"
+            class="toggle toggle-primary"
+            bind:checked={$settings.enabled}
+          />
+        </label>
+        <p class="text-sm opacity-70 ml-1">
+          When enabled, transcriptions can be processed by an LLM to improve
+          formatting, fix grammar, etc.
+        </p>
+      </div>
 
       {#if $settings.enabled}
-        <!-- ... existing provider config ... -->
+        <div class="divider pt-4">Enhancement Provider</div>
+
+        <div class="flex flex-wrap gap-4 items-center">
+          <div class="form-control">
+            <label class="label cursor-pointer gap-2">
+              <input
+                type="radio"
+                name="enhancement-provider"
+                class="radio radio-sm"
+                value="openai"
+                bind:group={$settings.provider}
+              />
+              <span class="label-text">OpenAI</span>
+            </label>
+          </div>
+          <div class="form-control">
+            <label class="label cursor-pointer gap-2">
+              <input
+                type="radio"
+                name="enhancement-provider"
+                class="radio radio-sm"
+                value="gemini"
+                bind:group={$settings.provider}
+              />
+              <span class="label-text">Gemini</span>
+            </label>
+          </div>
+          <div class="form-control">
+            <label class="label cursor-pointer gap-2">
+              <input
+                type="radio"
+                name="enhancement-provider"
+                class="radio radio-sm"
+                value="custom"
+                bind:group={$settings.provider}
+              />
+              <span class="label-text">Custom</span>
+            </label>
+          </div>
+        </div>
+
+        {#if $settings.provider === "openai"}
+          <div class="mt-4 p-4 border border-base-300 rounded-md space-y-4">
+            <h3 class="font-medium">OpenAI Configuration</h3>
+            <div class="form-control">
+              <label class="label" for="openai-enh-api-key">
+                <span class="label-text">OpenAI API Key*</span>
+              </label>
+              <input
+                id="openai-enh-api-key"
+                type="password"
+                placeholder="sk-..."
+                class="input input-bordered input-sm w-full"
+                bind:value={$settings.openaiApiKey}
+              />
+            </div>
+            <div class="form-control">
+              <label class="label" for="openai-enh-model-select">
+                <span class="label-text">OpenAI Model*</span>
+              </label>
+              <select
+                id="openai-enh-model-select"
+                class="select select-bordered select-sm w-full max-w-xs"
+                bind:value={$settings.openaiModel}
+              >
+                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                <option value="gpt-4.1">GPT-4.1</option>
+              </select>
+            </div>
+          </div>
+        {:else if $settings.provider === "gemini"}
+          <div class="mt-4 p-4 border border-base-300 rounded-md space-y-4">
+            <h3 class="font-medium">Gemini Configuration</h3>
+            <div class="form-control">
+              <label class="label" for="gemini-api-key">
+                <span class="label-text">Gemini API Key*</span>
+              </label>
+              <input
+                id="gemini-api-key"
+                type="password"
+                placeholder="AIza..."
+                class="input input-bordered input-sm w-full"
+                bind:value={$settings.geminiApiKey}
+              />
+            </div>
+            <div class="form-control">
+              <label class="label" for="gemini-model-select">
+                <span class="label-text">Gemini Model*</span>
+              </label>
+              <select
+                id="gemini-model-select"
+                class="select select-bordered select-sm w-full max-w-xs"
+                bind:value={$settings.geminiModel}
+              >
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                <option value="gemini-2.0-flash-lite"
+                  >Gemini 2.0 Flash Lite</option
+                >
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              </select>
+            </div>
+          </div>
+        {:else if $settings.provider === "custom"}
+          <div class="mt-4 p-4 border border-base-300 rounded-md space-y-4">
+            <h3 class="font-medium">Custom Provider Configuration</h3>
+
+            <div class="form-control">
+              <label class="label" for="custom-base-url">
+                <span class="label-text">Base URL</span>
+              </label>
+              <input
+                id="custom-base-url"
+                type="text"
+                placeholder="eg. https://api.mistral.ai/v1/"
+                class="input input-bordered input-sm w-full"
+                bind:value={$settings.customBaseUrl}
+              />
+              <label class="label" for="custom-base-url"
+                ><span class="label-text-alt text-xs"
+                  >Must be OpenAI API compatible.</span
+                ></label
+              >
+            </div>
+
+            <div class="form-control">
+              <label class="label" for="custom-model-name">
+                <span class="label-text">Model Name</span>
+              </label>
+              <input
+                id="custom-model-name"
+                type="text"
+                placeholder="e.g. mistral-small-latest"
+                class="input input-bordered input-sm w-full"
+                bind:value={$settings.customModelName}
+              />
+            </div>
+
+            <div class="form-control">
+              <label class="label" for="custom-api-key">
+                <span class="label-text">API Key</span>
+              </label>
+              <input
+                id="custom-api-key"
+                type="password"
+                placeholder="Enter API Key"
+                class="input input-bordered input-sm w-full"
+                bind:value={$settings.customApiKey}
+              />
+            </div>
+          </div>
+        {/if}
 
         <div class="divider py-4">Context Variables</div>
-        <!-- ... existing context variables ... -->
+        <p class="text-sm opacity-70 -mt-4 mb-4">
+          Enable context sources to include them in your prompts using
+          placeholders like <code class="kbd kbd-xs"
+            >{"{{context_screen}}"}</code
+          >
+          or <code class="kbd kbd-xs">{"{{context_input_field}}"}</code>. These
+          are available to all prompts in the chain.
+        </p>
+        <div class="form-control mb-2">
+          <label class="label cursor-pointer">
+            <input
+              type="checkbox"
+              class="toggle toggle-sm"
+              bind:checked={$settings.useContextScreen}
+            />
+            <span class="label-text">Screen Content</span>
+          </label>
+        </div>
+        <div class="form-control mb-2">
+          <label class="label cursor-pointer">
+            <input
+              type="checkbox"
+              class="toggle toggle-sm"
+              bind:checked={$settings.useContextInputField}
+            />
+            <span class="label-text">Input Field</span>
+          </label>
+        </div>
 
-        <div class="divider pt-4">Enhancement Prompt Chain</div>
+        <div class="divider py-4">Enhancement Prompt Chain</div>
         <p class="text-sm opacity-70 -mt-4 mb-2">
           Select and order the prompts to run in sequence.
         </p>
         <div class="form-control">
           <Multiselect
-            options={$allDisplayablePrompts.map(p => ({ value: p.id, label: p.name, original: p }))}
-            bind:selected={selectedPromptObjects}
+            options={multiselectComponentOptions}
+            selected={selectedMappedOptions}
             on:change={handleMultiselectChange}
             placeholder="Select prompts for the chain..."
-            multiple={true}
-            sortSelected={false}
-            closeOnSelect={false}
-            clearOnSelect={false}
-            idField="value"
-            labelField="label"
-            orderable={true}
           />
-           {#if selectedPromptObjects.length === 0}
+          {#if selectedMappedOptions.length === 0}
             <p class="text-xs text-warning-content mt-1">
-              Warning: No prompts selected. Enhancement will use the default two-step chain.
+              Warning: No prompts selected. Enhancement will use the default
+              two-step chain.
             </p>
           {/if}
         </div>
 
         <div class="divider pt-6">Manage Prompts</div>
         <div class="space-y-2">
-          {#each $allDisplayablePrompts as prompt (prompt.id)}
-            <div class="p-2 bg-base-200 rounded shadow-sm flex items-center gap-2">
+          {#each $allPrompts as prompt (prompt.id)}
+            <div
+              class="p-2 bg-base-200 rounded shadow-sm flex items-center gap-2"
+            >
               <span class="flex-1 truncate" title={prompt.name}>
                 {prompt.name}
                 {#if SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
                   <span class="badge badge-xs badge-outline ml-2">System</span>
                 {/if}
               </span>
-              <span class="text-xs opacity-60">T: {prompt.temperature.toFixed(1)}</span>
+              <span class="text-xs opacity-60"
+                >T: {prompt.temperature.toFixed(1)}</span
+              >
               <button
                 class="btn btn-xs btn-ghost"
-                title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "View/Edit Prompt"}
-                aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id) ? "View Prompt" : "View/Edit Prompt"}
-                on:click={() => openPromptModal(prompt.id)}
+                title={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)
+                  ? "View Prompt"
+                  : "View/Edit Prompt"}
+                aria-label={SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)
+                  ? "View Prompt"
+                  : "View/Edit Prompt"}
+                on:click={() => openPromptModalWrapper(prompt.id)}
               >
                 <i class="ri-eye-line"></i>
                 {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
-                  <span class="sr-only">/</span><i class="ri-pencil-line ml-1"></i>
+                  <span class="sr-only">/</span><i class="ri-pencil-line ml-1"
+                  ></i>
                 {/if}
               </button>
               {#if !SYSTEM_DEFAULT_PROMPT_IDS.has(prompt.id)}
@@ -3902,7 +3937,7 @@ File: src/renderer/src/components/settings/Enhancements.svelte
                   class="btn btn-xs btn-ghost text-error"
                   title="Delete Prompt Permanently"
                   aria-label="Delete Prompt Permanently"
-                  on:click={() => deletePrompt(prompt.id)}
+                  on:click={() => handleDeletePrompt(prompt.id)}
                 >
                   <i class="ri-delete-bin-line"></i>
                 </button>
@@ -3910,215 +3945,26 @@ File: src/renderer/src/components/settings/Enhancements.svelte
             </div>
           {:else}
             <p class="text-sm text-center opacity-60 py-4">
-              No prompts defined. Add a custom prompt or ensure system defaults are loaded.
+              No prompts defined. Add a custom prompt or ensure system defaults
+              are loaded.
             </p>
           {/each}
-        </div>
-        
-        <div class="mt-6">
-          {#if showAddPrompt}
-            <div class="p-4 border border-base-300 rounded-md space-y-3">
-              <h4 class="font-medium">Add New Prompt</h4>
-              <div class="form-control">
-                <label class="label py-1" for="new-prompt-name"
-                  ><span class="label-text">Prompt Name:</span></label
-                >
-                <input
-                  id="new-prompt-name"
-                  type="text"
-                  placeholder="e.g., Formal Report Style"
-                  class="input input-bordered input-sm w-full"
-                  bind:value={newPromptName}
-                />
-              </div>
-              <div class="form-control">
-                <label class="label py-1" for="new-prompt-template"
-                  ><span class="label-text">Prompt Template:</span></label
-                >
-                <textarea
-                  id="new-prompt-template"
-                  class="textarea textarea-bordered w-full"
-                  rows="4"
-                  placeholder="Enter your prompt. Use {'{{transcription}}'} or output of previous prompt."
-                  bind:value={newPromptTemplate}
-                ></textarea>
-                <span class="pt-2 block-inline text-sm"
-                  >Use <a
-                    target="_blank"
-                    class="underline"
-                    href="https://mustache.github.io/mustache.5.html"
-                    >mustache templating</a
-                  >. Variables:
-                  <code class="kbd kbd-xs h-auto">{"{{transcription}}"}</code>
-                  (for first prompt),
-                  <code class="kbd kbd-xs h-auto">{"{{previous_output}}"}</code>
-                  (for subsequent prompts),
-                  <code class="kbd kbd-xs h-auto">{"{{dictionary_words}}"}</code
-                  >,
-                  <code class="kbd kbd-xs h-auto">{"{{context_screen}}"}</code>,
-                  etc.</span
-                >
-              </div>
-              <div class="form-control">
-                <label class="label" for="new-prompt-temperature">
-                  <span class="label-text">Temperature:</span>
-                  <span class="label-text-alt"
-                    >{newPromptTemperature.toFixed(1)}</span
-                  >
-                </label>
-                <input
-                  id="new-prompt-temperature"
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  bind:value={newPromptTemperature}
-                  class="range range-primary range-sm"
-                />
-                <div class="w-full flex justify-between text-xs px-2 pt-1">
-                  <span>Precise</span><span>Balanced</span><span>Creative</span>
-                </div>
-              </div>
-              <div class="flex justify-end gap-2 pt-2">
-                <button
-                  class="btn btn-sm btn-ghost"
-                  on:click={() => {
-                    showAddPrompt = false;
-                    newPromptName = "";
-                    newPromptTemplate = "";
-                    newPromptTemperature = FALLBACK_CUSTOM_PROMPT_TEMPERATURE;
-                  }}>Cancel</button
-                >
-                <button class="btn btn-sm btn-primary" on:click={addPrompt}
-                  >Add Prompt</button
-                >
-              </div>
-            </div>
-          {:else}
-            <button
-              class="btn btn-sm btn-outline"
-              on:click={() => {
-                showAddPrompt = true;
-              }}
-            >
-              <i class="ri-add-line"></i> Add Custom Prompt
-            </button>
-          {/if}
         </div>
       {/if}
     </div>
   {/if}
 </div>
 
-{#if showPromptModal && currentPrompt}
-  <dialog id="prompt_modal" class="modal modal-open">
-    <div class="modal-box w-11/12 max-w-2xl">
-      <h3 class="font-bold text-lg mb-4">
-        {#if modalMode === "view"}
-          View Prompt: {currentPrompt.name}
-        {:else if modalMode === "edit"}
-          Edit Prompt: {currentPrompt.name}
-        {/if}
-      </h3>
-
-      {#if modalMode === "view"}
-        <div class="space-y-4">
-          <div>
-            <div class="label">
-              <span class="label-text font-semibold">Name:</span>
-            </div>
-            <p class="p-2 bg-base-200 rounded">{currentPrompt.name}</p>
-          </div>
-          <div>
-            <div class="label">
-              <span class="label-text font-semibold">Template:</span>
-            </div>
-            <pre
-              class="p-2 bg-base-200 rounded text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">{currentPrompt.template}</pre>
-          </div>
-          <div>
-            <div class="label">
-              <span class="label-text font-semibold">Temperature:</span>
-            </div>
-            <p class="p-2 bg-base-200 rounded">
-              {currentPrompt.temperature.toFixed(1)}
-            </p>
-          </div>
-        </div>
-      {:else if modalMode === "edit" && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id) }
-        <!-- Edit mode only for non-system prompts -->
-        <div class="space-y-4">
-          <div class="form-control">
-            <label class="label py-1" for="edit-prompt-name"
-              ><span class="label-text">Prompt Name:</span></label
-            >
-            <input
-              id="edit-prompt-name"
-              type="text"
-              class="input input-bordered w-full"
-              bind:value={editPromptName}
-            />
-          </div>
-          <div class="form-control">
-            <label class="label py-1" for="edit-prompt-template"
-              ><span class="label-text">Prompt Template:</span></label
-            >
-            <textarea
-              id="edit-prompt-template"
-              class="textarea textarea-bordered w-full"
-              rows="6"
-              placeholder="Use {'{{transcription}}'} or {'{{previous_output}}'}..."
-              bind:value={editPromptTemplate}
-            ></textarea>
-            <span class="pt-2 block-inline text-sm"
-              >Variables: <code class="kbd kbd-xs h-auto"
-                >{"{{transcription}}"}</code
-              >, <code class="kbd kbd-xs h-auto">{"{{previous_output}}"}</code>,
-              context vars, etc.</span
-            >
-          </div>
-          <div class="form-control">
-            <label class="label" for="edit-prompt-temperature">
-              <span class="label-text">Temperature:</span>
-              <span class="label-text-alt"
-                >{editPromptTemperature.toFixed(1)}</span
-              >
-            </label>
-            <input
-              id="edit-prompt-temperature"
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              bind:value={editPromptTemperature}
-              class="range range-primary range-sm"
-            />
-            <div class="w-full flex justify-between text-xs px-2 pt-1">
-              <span>Precise</span><span>Balanced</span><span>Creative</span>
-            </div>
-          </div>
-        </div>
-      {:else if modalMode === "edit" && SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)}
-         <!-- This case should ideally not be reached if openPromptModal sets mode to "view" for system defaults -->
-        <p class="text-warning">
-          System default prompts cannot be edited.
-        </p>
-      {/if}
-
-      <div class="modal-action mt-6">
-        <button class="btn btn-ghost" on:click={closeModal}>Close</button>
-        {#if modalMode === "edit" && currentPrompt && !SYSTEM_DEFAULT_PROMPT_IDS.has(currentPrompt.id)}
-          <button class="btn btn-primary" on:click={saveEditedPrompt}
-            >Save Changes</button
-          >
-        {/if}
-      </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-      <button on:click={closeModal}>close</button>
-    </form>
-  </dialog>
-{/if}
+<!-- Prompt Modal for add/edit/view -->
+<PromptModal
+  show={showPromptModal}
+  mode={modalMode}
+  prompt={currentPrompt}
+  systemDefaultIds={SYSTEM_DEFAULT_PROMPT_IDS}
+  fallbackTemperature={FALLBACK_CUSTOM_PROMPT_TEMPERATURE}
+  on:close={handlePromptModalClose}
+  on:save={handlePromptModalSave}
+/>
 
 ================
 File: src/renderer/src/components/settings/History.svelte
@@ -4355,19 +4201,23 @@ File: src/renderer/src/components/settings/History.svelte
                   </div>
                 </div>
 
-                {#if $selectedEntry.promptNameUsed}
-                  <h4 class="font-semibold mb-1">Prompt: {$selectedEntry.promptNameUsed}</h4>
-                {/if}
-                {#if $selectedEntry.renderedPrompt}
-                    <div class="collapse collapse-arrow bg-base-200/50">
-                        <input type="checkbox" />
-                        <div class="collapse-title text-xs font-medium">
-                            View Rendered Prompt
+                {#if $selectedEntry.promptDetails.length > 0}
+                  <div>
+                    <h4 class="font-semibold mb-1">Prompt Details</h4>
+                    {#each $selectedEntry.promptDetails as detail}
+                      <details class="mb-2">
+                        <summary class="bg-base-200 p-3 rounded cursor-pointer">
+                          {detail.promptName}
+                        </summary>
+                        <div class="bg-base-100 p-3 text-sm whitespace-pre-wrap break-words mt-2">
+                          <p><strong>Rendered Prompt:</strong></p>
+                          <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.renderedPrompt}</pre>
+                          <p><strong>Enhanced Text:</strong></p>
+                          <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.enhancedText}</pre>
                         </div>
-                        <div class="collapse-content">
-                            <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{$selectedEntry.renderedPrompt}</pre>
-                        </div>
-                    </div>
+                      </details>
+                    {/each}
+                  </div>
                 {/if}
 
                 {#if $selectedEntry.enhancedText}
@@ -4743,6 +4593,152 @@ File: src/renderer/src/components/settings/Permissions.svelte
       </div>
   </div>
 </div>
+
+================
+File: src/renderer/src/components/settings/PromptModal.svelte
+================
+<script lang="ts">
+  import { createEventDispatcher } from "svelte";
+  import type { DisplayablePrompt } from "../lib/promptManager"; // Import DisplayablePrompt
+
+  // Types
+  export interface PromptModalProps {
+    show: boolean;
+    mode: "view" | "edit" | "add";
+    prompt: DisplayablePrompt | null; // Use DisplayablePrompt
+    systemDefaultIds: Set<string>;
+    fallbackTemperature: number;
+  }
+  export let show: boolean;
+  export let mode: "view" | "edit" | "add";
+  export let prompt: DisplayablePrompt | null; // Use DisplayablePrompt
+  export let systemDefaultIds: Set<string>;
+  export let fallbackTemperature: number = 0.7;
+
+  // For editing/adding
+  let name = "";
+  let template = "";
+  let temperature = fallbackTemperature;
+
+  const dispatch = createEventDispatcher();
+
+  $: if (show && prompt && (mode === "edit" || mode === "view")) {
+    name = prompt.name;
+    template = prompt.template;
+    temperature = prompt.temperature ?? fallbackTemperature;
+  }
+  $: if (show && mode === "add") {
+    name = "";
+    template = "";
+    temperature = fallbackTemperature;
+  }
+
+  function close() {
+    dispatch("close");
+  }
+  function save() {
+    if (!name.trim() || !template.trim()) {
+      alert("Prompt name and template cannot be empty.");
+      return;
+    }
+    dispatch("save", { name, template, temperature });
+  }
+</script>
+
+{#if show}
+  <dialog id="prompt_modal" class="modal modal-open">
+    <div class="modal-box w-11/12 max-w-2xl">
+      <h3 class="font-bold text-lg mb-4">
+        {#if mode === "view"}
+          View Prompt: {prompt?.name}
+        {:else if mode === "edit"}
+          Edit Prompt: {prompt?.name}
+        {:else if mode === "add"}
+          Add New Prompt
+        {/if}
+      </h3>
+
+      {#if mode === "view"}
+        <div class="space-y-4">
+          <div>
+            <div class="label">
+              <span class="label-text font-semibold">Name:</span>
+            </div>
+            <p class="p-2 bg-base-200 rounded">{prompt.name}</p>
+          </div>
+          <div>
+            <div class="label">
+              <span class="label-text font-semibold">Template:</span>
+            </div>
+            <pre class="p-2 bg-base-200 rounded text-sm whitespace-pre-wrap break-words max-h-60 overflow-y-auto">{prompt.template}</pre>
+          </div>
+          <div>
+            <div class="label">
+              <span class="label-text font-semibold">Temperature:</span>
+            </div>
+            <p class="p-2 bg-base-200 rounded">{prompt.temperature.toFixed(1)}</p>
+          </div>
+        </div>
+      {:else if mode === "edit" && !systemDefaultIds.has(prompt.id)}
+        <div class="space-y-4">
+          <div class="form-control">
+            <label class="label py-1" for="edit-prompt-name"><span class="label-text">Prompt Name:</span></label>
+            <input id="edit-prompt-name" type="text" class="input input-bordered w-full" bind:value={name} />
+          </div>
+          <div class="form-control">
+            <label class="label py-1" for="edit-prompt-template"><span class="label-text">Prompt Template:</span></label>
+            <textarea id="edit-prompt-template" class="textarea textarea-bordered w-full" rows="6" placeholder="Use {'{{transcription}}'} or {'{{previous_output}}'}..." bind:value={template}></textarea>
+            <span class="pt-2 block-inline text-sm">Variables: <code class="kbd kbd-xs h-auto">{"{{transcription}}"}</code>, <code class="kbd kbd-xs h-auto">{"{{previous_output}}"}</code>, context vars, etc.</span>
+          </div>
+          <div class="form-control">
+            <label class="label" for="edit-prompt-temperature">
+              <span class="label-text">Temperature:</span>
+              <span class="label-text-alt">{temperature.toFixed(1)}</span>
+            </label>
+            <input id="edit-prompt-temperature" type="range" min="0" max="2" step="0.1" bind:value={temperature} class="range range-primary range-sm" />
+            <div class="w-full flex justify-between text-xs px-2 pt-1">
+              <span>Precise</span><span>Balanced</span><span>Creative</span>
+            </div>
+          </div>
+        </div>
+      {:else if mode === "add"}
+        <div class="space-y-4">
+          <div class="form-control">
+            <label class="label py-1" for="add-prompt-name"><span class="label-text">Prompt Name:</span></label>
+            <input id="add-prompt-name" type="text" class="input input-bordered w-full" bind:value={name} />
+          </div>
+          <div class="form-control">
+            <label class="label py-1" for="add-prompt-template"><span class="label-text">Prompt Template:</span></label>
+            <textarea id="add-prompt-template" class="textarea textarea-bordered w-full" rows="6" placeholder="Use {'{{transcription}}'} or {'{{previous_output}}'}..." bind:value={template}></textarea>
+            <span class="pt-2 block-inline text-sm">Variables: <code class="kbd kbd-xs h-auto">{"{{transcription}}"}</code>, <code class="kbd kbd-xs h-auto">{"{{previous_output}}"}</code>, context vars, etc.</span>
+          </div>
+          <div class="form-control">
+            <label class="label" for="add-prompt-temperature">
+              <span class="label-text">Temperature:</span>
+              <span class="label-text-alt">{temperature.toFixed(1)}</span>
+            </label>
+            <input id="add-prompt-temperature" type="range" min="0" max="2" step="0.1" bind:value={temperature} class="range range-primary range-sm" />
+            <div class="w-full flex justify-between text-xs px-2 pt-1">
+              <span>Precise</span><span>Balanced</span><span>Creative</span>
+            </div>
+          </div>
+        </div>
+      {:else if mode === "edit" && systemDefaultIds.has(prompt.id)}
+        <p class="text-warning">System default prompts cannot be edited.</p>
+      {/if}
+
+      <div class="modal-action mt-6">
+        <button class="btn btn-ghost" on:click={close}>Close</button>
+        {#if (mode === "edit" && prompt && !systemDefaultIds.has(prompt.id)) || mode === "add"}
+          <button class="btn btn-primary" on:click={save}>Save Changes</button>
+        {/if}
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button on:click={close}>close</button>
+    </form>
+  </dialog>
+{/if}
 
 ================
 File: src/renderer/src/components/settings/Shortcuts.svelte
@@ -5579,6 +5575,197 @@ export function get<T>(store: { subscribe: (cb: (value: T) => void) => () => voi
   unsubscribe();
   return value;
 }
+
+================
+File: src/renderer/src/lib/promptManager.ts
+================
+import { writable, get, derived } from "svelte/store";
+import { v4 as uuidv4 } from "uuid";
+import type { EnhancementSettings, EnhancementPrompt as StoreEnhancementPrompt } from "../../../main/store";
+
+// Interface for the new system default prompts (fetched from backend)
+export interface SystemPrompt {
+  id: string;
+  name: string;
+  template: string;
+  temperature: number;
+  isFallback?: boolean;
+}
+
+export type DisplayablePrompt = StoreEnhancementPrompt | SystemPrompt;
+
+export const DEFAULT_CLEAN_TRANSCRIPTION_ID = "default_clean_transcription";
+export const DEFAULT_CONTEXTUAL_FORMATTING_ID = "default_contextual_formatting";
+export const SYSTEM_DEFAULT_PROMPT_IDS = new Set([
+  DEFAULT_CLEAN_TRANSCRIPTION_ID,
+  DEFAULT_CONTEXTUAL_FORMATTING_ID,
+]);
+
+export const FALLBACK_CUSTOM_PROMPT_TEMPERATURE = 0.7; // For custom prompts if not set
+
+export const customPrompts = writable<StoreEnhancementPrompt[]>([]); // Stores only custom prompts
+export const systemPromptCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
+
+// Create a new derived store for all prompts, suitable for Multiselect and general listing
+export const allPrompts = derived(
+  [customPrompts, systemPromptCache],
+  ([$customPrompts, $systemPromptsCache]) => {
+    const systemDefaults = Array.from(SYSTEM_DEFAULT_PROMPT_IDS)
+      .map(id => $systemPromptsCache[id])
+      .filter(p => p) as SystemPrompt[];
+    
+    const all: DisplayablePrompt[] = [...systemDefaults, ...$customPrompts.map(p => ({
+      ...p,
+      temperature: p.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE
+    }))];
+    
+    // Ensure unique prompts by ID, prioritizing system defaults if IDs were to clash (unlikely)
+    const uniquePrompts = new Map<string, DisplayablePrompt>();
+    all.forEach(p => {
+      if (!uniquePrompts.has(p.id)) {
+        uniquePrompts.set(p.id, p);
+      }
+    });
+    return Array.from(uniquePrompts.values());
+  }
+);
+
+export async function initializePrompts(settingsStore: ReturnType<typeof writable<EnhancementSettings>>) {
+  try {
+    const storedPromptsPromise = window.api.getStoreValue("enhancementPrompts") as Promise<Partial<StoreEnhancementPrompt>[] | undefined>;
+    
+    const defaultPromptDetailPromises = Array.from(SYSTEM_DEFAULT_PROMPT_IDS).map(id =>
+      window.api.getDefaultPromptDetails(id).catch(err => {
+        window.api.log("error", `Failed to fetch details for default prompt ${id} on mount:`, err);
+        return null; // Allow Promise.all to complete
+      })
+    );
+
+    // Correctly handle Promise.all results
+    const allPromises = [storedPromptsPromise, ...defaultPromptDetailPromises];
+    const results = await Promise.all(allPromises);
+
+    const storedPromptsResult = results[0] as Partial<StoreEnhancementPrompt>[] | undefined;
+    const fetchedDefaultDetails = results.slice(1) as (SystemPrompt | null)[];
+
+
+    // Populate systemPromptCache
+    fetchedDefaultDetails.forEach(details => {
+      if (details) {
+        // Ensure details is not null and has an id
+        systemPromptCache.update(cache => ({ ...cache, [(details as SystemPrompt).id]: details as SystemPrompt }));
+      }
+    });
+
+    if (storedPromptsResult) {
+      const migratedPrompts = (storedPromptsResult as Partial<StoreEnhancementPrompt>[])
+        .filter((p) => p?.id && p.name && p.template) // Basic validation
+        .map((p) => ({
+          id: p!.id!,
+          name: p!.name!,
+          template: p!.template!,
+          temperature: p?.temperature ?? FALLBACK_CUSTOM_PROMPT_TEMPERATURE,
+        }));
+      customPrompts.set(migratedPrompts as StoreEnhancementPrompt[]);
+    } else {
+      customPrompts.set([]);
+    }
+  } catch (error) {
+    window.api.log("error", "Failed to load enhancement prompts:", error);
+    customPrompts.set([]);
+  }
+}
+
+export async function addPrompt(name: string, template: string, temperature: number) {
+  const newPrompt: StoreEnhancementPrompt = {
+    id: uuidv4(),
+    name: name.trim(),
+    template: template.trim(),
+    temperature,
+  };
+  const currentCustoms = get(customPrompts);
+  const updatedCustoms = [...currentCustoms, newPrompt];
+  try {
+    await window.api.setStoreValue("enhancementPrompts", updatedCustoms);
+    customPrompts.set(updatedCustoms);
+    window.api.log("info", "New prompt saved:", newPrompt.id);
+  } catch (error) {
+    window.api.log("error", "Failed to save new prompt:", error);
+    alert("Failed to save the new prompt.");
+    throw error; // Re-throw to allow UI to handle
+  }
+}
+
+export async function editPrompt(id: string, name: string, template: string, temperature: number) {
+  if (SYSTEM_DEFAULT_PROMPT_IDS.has(id)) {
+    window.api.log("warn", `Attempted to edit system default prompt ID: ${id}. This is not allowed.`);
+    alert("System default prompts cannot be edited.");
+    return;
+  }
+  const updatedPrompt: StoreEnhancementPrompt = {
+    id,
+    name: name.trim(),
+    template: template.trim(),
+    temperature,
+  };
+  const currentCustoms = get(customPrompts);
+  const updatedCustoms = currentCustoms.map((p) =>
+    p.id === updatedPrompt.id ? updatedPrompt : p,
+  );
+  try {
+    await window.api.setStoreValue("enhancementPrompts", updatedCustoms);
+    customPrompts.set(updatedCustoms);
+    window.api.log("info", "Prompt updated:", updatedPrompt.id);
+  } catch (error) {
+    window.api.log("error", "Failed to save updated prompt:", error);
+    alert("Failed to save the updated prompt.");
+    throw error; // Re-throw to allow UI to handle
+  }
+}
+
+export async function deletePrompt(idToDelete: string, settingsStore: ReturnType<typeof writable<EnhancementSettings>>) {
+  if (SYSTEM_DEFAULT_PROMPT_IDS.has(idToDelete)) {
+    window.api.log("warn", `Attempted to delete system default prompt ID: ${idToDelete}. This is not allowed.`);
+    return;
+  }
+
+  const currentCustoms = get(customPrompts);
+  const updatedCustoms = currentCustoms.filter((p) => p.id !== idToDelete);
+  
+  const currentSettings = get(settingsStore);
+  let updatedChain = currentSettings.activePromptChain.filter(
+    (id) => id !== idToDelete,
+  );
+
+  if (updatedChain.length === 0) {
+    updatedChain.push(DEFAULT_CLEAN_TRANSCRIPTION_ID, DEFAULT_CONTEXTUAL_FORMATTING_ID);
+  }
+
+  try {
+    await Promise.all([
+      window.api.setStoreValue("enhancementPrompts", updatedCustoms),
+      window.api.setStoreValue("enhancements", {
+        ...currentSettings,
+        activePromptChain: updatedChain,
+      }),
+    ]);
+
+    customPrompts.set(updatedCustoms);
+    settingsStore.update((s) => ({ ...s, activePromptChain: updatedChain }));
+
+    window.api.log(
+      "info",
+      `Deleted enhancement prompt ID: ${idToDelete} and updated chain.`,
+    );
+  } catch (error) {
+    window.api.log("error", "Failed to delete prompt:", error);
+    alert("Failed to delete the prompt.");
+    throw error; // Re-throw to allow UI to handle
+  }
+}
+
+// Re-export StoreEnhancementPrompt for convenience if needed by consumers
+export type { StoreEnhancementPrompt };
 
 ================
 File: src/renderer/src/App.svelte

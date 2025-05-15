@@ -21,6 +21,12 @@ const DEFAULT_CONTEXTUAL_FORMATTING_TEMP = 1.0;
 const FALLBACK_CLEAN_TEMPLATE = "Clean this: {{transcription}}";
 const FALLBACK_FORMATTING_TEMPLATE = "Format this: {{previous_output}}";
 
+// Map default prompt IDs to their human-friendly names
+const DEFAULT_PROMPT_NAMES: Record<string, string> = {
+  [DEFAULT_CLEAN_TRANSCRIPTION_ID]: 'Clean Transcription',
+  [DEFAULT_CONTEXTUAL_FORMATTING_ID]: 'Input Formatting'
+};
+
 // Helper function to read prompt file content with fallback
 async function readPromptFileContent(fileName: string, fallbackTemplate: string): Promise<string> {
   try {
@@ -94,9 +100,11 @@ export class OpenaiEnhancementService implements EnhancementService {
     }
 
     const promptMap = new Map(this.defaultPrompts);
+    const promptNameMap = new Map(Object.entries(DEFAULT_PROMPT_NAMES));
     const globalDefaultTempForCustom = 0.7;
     customPrompts.forEach(p => {
         promptMap.set(p.id, { template: p.template, temperature: p.temperature ?? globalDefaultTempForCustom });
+        promptNameMap.set(p.id, p.name);
     });
 
     let currentText = initialText;
@@ -146,9 +154,10 @@ export class OpenaiEnhancementService implements EnhancementService {
 
             if (stepResult) {
                 currentText = stepResult.trim();
+                const promptName = promptNameMap.get(promptId) || promptId;
                 promptDetails.push({
                     promptId,
-                    promptName: promptDetailsEntry.template.substring(0, 20), // Example name logic
+                    promptName,
                     renderedPrompt: finalPrompt,
                     enhancedText: currentText
                 });

@@ -18,6 +18,22 @@ import type { HistoryRecord } from '../historyService';
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
 
+// Default prompt definitions
+const DEFAULT_PROMPTS_CONFIG: Record<string, { name: string; filePath: string; temperature: number; fallbackTemplate: string }> = {
+    "default_clean_transcription": {
+        name: "🧽 Clean Transcription",
+        filePath: "resources/prompt-clean-transcription.txt",
+        temperature: 0.1,
+        fallbackTemplate: ""
+    },
+    "default_contextual_formatting": {
+        name: "✏️ Input Formatting",
+        filePath: "resources/prompt-contextual-formatting.txt",
+        temperature: 1.0,
+        fallbackTemplate: ""
+    }
+};
+
 export function initializeIpcHandlers(dependencies: {
     transcriptionManager: TranscriptionManager;
     enhancementManager: EnhancementManager;
@@ -144,51 +160,24 @@ export function setupIpcHandlers(): void {
     });
 
     ipcMain.handle('getDefaultPromptDetails', async (_event, id: string) => {
-      const DEFAULT_PROMPTS_CONFIG = {
-        "default_clean_transcription": {
-          name: "🧽 Clean Transcription",
-          filePath: "resources/prompt-clean-transcription.txt",
-          temperature: 0.1,
-          fallbackTemplate: ""
-        },
-        "default_contextual_formatting": {
-          name: "✏️ Input Formatting",
-          filePath: "resources/prompt-contextual-formatting.txt",
-          temperature: 1.0,
-          fallbackTemplate: ""
+        const config = DEFAULT_PROMPTS_CONFIG[id];
+        if (!config) {
+            logger.error(`[IPC] getDefaultPromptDetails: Unknown default prompt ID requested: ${id}`);
+            return null;
         }
-      };
+        try {
+            const basePath = app.isPackaged
+                ? process.resourcesPath
+                : path.join(app.getAppPath());
+            const fullFilePath = path.join(basePath, config.filePath);
 
-      const config = DEFAULT_PROMPTS_CONFIG[id as keyof typeof DEFAULT_PROMPTS_CONFIG];
-      if (!config) {
-        logger.error(`[IPC] getDefaultPromptDetails: Unknown default prompt ID requested: ${id}`);
-        return null;
-      }
-
-      try {
-        const basePath = app.isPackaged
-            ? process.resourcesPath
-            : path.join(app.getAppPath()); // resources subdir is part of config.filePath
-        const fullFilePath = path.join(basePath, config.filePath);
-
-        logger.debug(`[IPC] Attempting to read default prompt file for ID "${id}" from: ${fullFilePath}`);
-        const template = await fs.readFile(fullFilePath, 'utf-8');
-        return {
-          id: id,
-          name: config.name,
-          template: template,
-          temperature: config.temperature
-        };
-      } catch (error) {
-        logger.error(`[IPC] Failed to read default prompt file for ID "${id}" at ${config.filePath}:`, error);
-        return {
-          id: id,
-          name: config.name,
-          template: config.fallbackTemplate,
-          temperature: config.temperature,
-          isFallback: true
-        };
-      }
+            logger.debug(`[IPC] Attempting to read default prompt file for ID "${id}" from: ${fullFilePath}`);
+            const template = await fs.readFile(fullFilePath, 'utf-8');
+            return { id, name: config.name, template, temperature: config.temperature };
+        } catch (error) {
+            logger.error(`[IPC] Failed to read default prompt file for ID "${id}" at ${config.filePath}:`, error);
+            return { id, name: config.name, template: config.fallbackTemplate, temperature: config.temperature, isFallback: true };
+        }
     });
 
     ipcMain.handle('getLogFilePath', () => {

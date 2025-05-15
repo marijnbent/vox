@@ -234,13 +234,17 @@
                   <div>
                     <h4 class="font-semibold mb-1">Prompt Details</h4>
                     {#each $selectedEntry.promptDetails as detail}
-                      <div class="bg-base-200 p-3 rounded text-sm whitespace-pre-wrap break-words mb-2">
-                        <p><strong>Prompt Name:</strong> {detail.promptName}</p>
-                        <p><strong>Rendered Prompt:</strong></p>
-                        <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.renderedPrompt}</pre>
-                        <p><strong>Enhanced Text:</strong></p>
-                        <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.enhancedText}</pre>
-                      </div>
+                      <details class="mb-2">
+                        <summary class="bg-base-200 p-3 rounded cursor-pointer">
+                          {detail.promptName}
+                        </summary>
+                        <div class="bg-base-100 p-3 text-sm whitespace-pre-wrap break-words mt-2">
+                          <p><strong>Rendered Prompt:</strong></p>
+                          <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.renderedPrompt}</pre>
+                          <p><strong>Enhanced Text:</strong></p>
+                          <pre class="text-xs whitespace-pre-wrap break-words overflow-y-auto">{detail.enhancedText}</pre>
+                        </div>
+                      </details>
                     {/each}
                   </div>
                 {/if}
