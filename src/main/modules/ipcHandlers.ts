@@ -306,7 +306,8 @@ async function handleTranscribeAudio(_, audio: { audioData: ArrayBuffer; mimeTyp
                 originalText: originalTranscriptionText,
                 renderedPrompt: finalPromptRendered, // Now null
                 enhancedText: finalText !== originalTranscriptionText ? finalText : null,
-                promptIdUsed: promptIdForHistory // Now null
+                promptIdUsed: promptIdForHistory, // Now null
+                promptChainUsed: enhancementSettings.activePromptChain // Save the active prompt chain
             };
             historyService.addHistoryEntry(historyEntryData);
         } catch(historyError) {

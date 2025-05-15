@@ -3,7 +3,6 @@ import path from 'path';
 import { app } from 'electron';
 import fs from 'fs';
 import { logger } from './logger';
-import store, { type EnhancementPrompt } from './store';
 
 export interface HistoryRecord {
   id: string;
@@ -13,6 +12,8 @@ export interface HistoryRecord {
   enhancedText: string | null;
   promptIdUsed: string | null;
   promptNameUsed?: string | null;
+  promptChainUsed?: string[] | null; // New field to store the chain of prompts used
+  promptDetails?: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[]; // New field for detailed prompt information
 }
 
 export interface PaginatedHistory {
@@ -52,17 +53,23 @@ function initializeSchema(): void {
                 originalText TEXT NOT NULL,
                 renderedPrompt TEXT,
                 enhancedText TEXT,
-                promptIdUsed TEXT
+                promptIdUsed TEXT,
+                promptChainUsed TEXT
             );
         `);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history (timestamp);`);
 
-        const columns = db.pragma('table_info(history)');
-        const hasRenderedPrompt = columns.some((col: any) => col.name === 'renderedPrompt');
-        if (!hasRenderedPrompt) {
-            db.exec('ALTER TABLE history ADD COLUMN renderedPrompt TEXT;');
-            logger.info('Added renderedPrompt column to history table.');
-        }
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS prompt_details (
+                historyId TEXT NOT NULL,
+                promptId TEXT NOT NULL,
+                promptName TEXT NOT NULL,
+                renderedPrompt TEXT,
+                enhancedText TEXT,
+                PRIMARY KEY (historyId, promptId),
+                FOREIGN KEY (historyId) REFERENCES history(id) ON DELETE CASCADE
+            );
+        `);
 
         logger.info('Database schema initialized successfully.');
     } catch (error) {
@@ -72,7 +79,7 @@ function initializeSchema(): void {
 
 initializeSchema();
 
-export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'>): void {
+export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'> & { promptDetails: { promptId: string; promptName: string; renderedPrompt: string; enhancedText: string; }[] }): void {
     if (!db) {
         logger.error('Cannot add history entry: Database not initialized.');
         return;
@@ -80,10 +87,14 @@ export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'>):
     const timestamp = Date.now();
     const id = `${timestamp}-${Math.random().toString(36).substring(2, 8)}`;
     const sql = `
-        INSERT INTO history (id, timestamp, originalText, renderedPrompt, enhancedText, promptIdUsed)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO history (id, timestamp, originalText, renderedPrompt, enhancedText, promptIdUsed, promptChainUsed)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
-    try {
+    const promptDetailsSql = `
+        INSERT INTO prompt_details (historyId, promptId, promptName, renderedPrompt, enhancedText)
+        VALUES (?, ?, ?, ?, ?)
+    `;
+    const transaction = db.transaction(() => {
         const stmt = db.prepare(sql);
         stmt.run(
             id,
@@ -91,8 +102,24 @@ export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'>):
             entry.originalText,
             entry.renderedPrompt ?? null,
             entry.enhancedText ?? null,
-            entry.promptIdUsed ?? null
+            entry.promptIdUsed ?? null,
+            JSON.stringify(entry.promptChainUsed ?? null)
         );
+
+        const promptDetailsStmt = db.prepare(promptDetailsSql);
+        for (const detail of entry.promptDetails) {
+            promptDetailsStmt.run(
+                id,
+                detail.promptId,
+                detail.promptName,
+                detail.renderedPrompt,
+                detail.enhancedText
+            );
+        }
+    });
+
+    try {
+        transaction();
         logger.info(`Added history entry: ${id}`);
     } catch (error) {
         logger.error('Failed to add history entry:', error);
@@ -100,7 +127,7 @@ export function addHistoryEntry(entry: Omit<HistoryRecord, 'id' | 'timestamp'>):
 }
 
 export function getHistoryEntries(page = 1, pageSize = 10): PaginatedHistory | null {
-     if (!db) {
+    if (!db) {
         logger.error('Cannot get history entries: Database not initialized.');
         return null;
     }
@@ -119,20 +146,17 @@ export function getHistoryEntries(page = 1, pageSize = 10): PaginatedHistory | n
         const stmt = db.prepare(sql);
         let entries = stmt.all(pageSize, offset) as HistoryRecord[];
 
-        const prompts = store.get('enhancementPrompts', []) as EnhancementPrompt[];
-        const promptMap = new Map(prompts.map(p => [p.id, p.name]));
+        const promptDetailsSql = `
+            SELECT * FROM prompt_details WHERE historyId = ?
+        `;
+        const promptDetailsStmt = db.prepare(promptDetailsSql);
 
         entries = entries.map(entry => {
-            let promptName: string | null = null;
-            if (entry.promptIdUsed === 'default') {
-                promptName = 'Default Prompt';
-            } else if (entry.promptIdUsed) {
-                promptName = promptMap.get(entry.promptIdUsed) ?? 'Deleted Prompt';
-            }
-            return { ...entry, promptNameUsed: promptName };
+            const promptDetails = promptDetailsStmt.all(entry.id);
+            return { ...entry, promptDetails };
         });
 
-        logger.info(`Fetched history page ${currentPage}/${totalPages} (${entries.length} entries with prompt names)`);
+        logger.info(`Fetched history page ${currentPage}/${totalPages} (${entries.length} entries with prompt details)`);
 
         return {
             entries,
