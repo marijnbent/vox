@@ -5,7 +5,6 @@
   import PromptModal from "./PromptModal.svelte";
   import type {
     EnhancementSettings,
-    EnhancementPrompt as StoreEnhancementPrompt,
   } from "../../../../main/store";
   import {
     customPrompts,
@@ -173,21 +172,17 @@
         "error",
         `Unknown multiselect change event detail: ${JSON.stringify(detail)}`,
       );
-      return; // Do not update if the event is not understood.
+      return;
     }
 
-    // Only update the store if the chain has actually changed to prevent unnecessary reactivity.
     if (JSON.stringify(currentChain) !== JSON.stringify(newActiveChainIds)) {
       settings.update((s) => ({
         ...s,
         activePromptChain: newActiveChainIds,
       }));
     }
-    // The reactive block `$: { ... }` (lines 69-101) will derive selectedMappedOptions
-    // from the updated $settings.activePromptChain, which then updates the `selected` prop of the Multiselect.
   };
 
-  // Helper to open modal for view/edit/add
   function openPromptModalWrapper(promptId?: string) {
     if (!promptId) {
       modalMode = "add";
@@ -248,7 +243,6 @@
         showPromptModal = false;
       }
     } catch (error) {
-      // Error is already logged and alerted by the manager
       window.api.log(
         "debug",
         "Prompt save/edit failed at component level, handled by manager.",
@@ -263,9 +257,7 @@
         "enhancements",
       ) as Promise<Partial<EnhancementSettings> | undefined>;
 
-      // Initialize prompts using the manager
-      await initializePrompts(settings); // Pass settings store if needed by manager, or remove if not
-
+      await initializePrompts(settings);
       const storedSettings = await storedSettingsPromise;
 
       if (storedSettings) {
@@ -275,18 +267,8 @@
             Array.isArray(chain) &&
             chain.length === 1 &&
             chain[0] === "default";
-          const isPartialNewDefault =
-            Array.isArray(chain) &&
-            chain.length === 1 &&
-            (chain[0] === DEFAULT_CLEAN_TRANSCRIPTION_ID ||
-              chain[0] === DEFAULT_CONTEXTUAL_FORMATTING_ID);
 
-          if (
-            !Array.isArray(chain) ||
-            chain.length === 0 ||
-            isOldDefault ||
-            isPartialNewDefault
-          ) {
+          if (!Array.isArray(chain) || chain.length === 0 || isOldDefault) {
             chain = [
               DEFAULT_CLEAN_TRANSCRIPTION_ID,
               DEFAULT_CONTEXTUAL_FORMATTING_ID,
@@ -303,7 +285,6 @@
           };
         });
       } else {
-        // Ensure default chain is set if no settings are stored
         settings.update((s) => ({
           ...s,
           activePromptChain: [
@@ -312,15 +293,12 @@
           ],
         }));
       }
-
-      // Prompt loading is handled by initializePrompts
     } catch (error) {
       window.api.log(
         "error",
         "Failed to load enhancement settings or prompts:",
         error,
       );
-      // customPrompts.set([]); // Managed by promptManager
     } finally {
       isLoading = false;
     }
@@ -657,7 +635,6 @@
   {/if}
 </div>
 
-<!-- Prompt Modal for add/edit/view -->
 <PromptModal
   show={showPromptModal}
   mode={modalMode}
