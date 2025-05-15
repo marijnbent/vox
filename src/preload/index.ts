@@ -84,6 +84,9 @@ const api = {
   getLogLines: (lineCount?: number): Promise<string[]> => ipcRenderer.invoke('getLogLines', lineCount),
   notifyRecorderStarted: (): void => ipcRenderer.send('recorder-actually-started'),
   playSystemSound: (soundName: string): Promise<void> => ipcRenderer.invoke('playSystemSound', soundName),
+  controlMusic: (action: 'playpause' | 'play' | 'pause'): Promise<void> => ipcRenderer.invoke('controlMusic', action),
+  setSystemVolume: (volume: number): Promise<void> => ipcRenderer.invoke('setSystemVolume', volume),
+  getSystemVolume: (): Promise<number | null> => ipcRenderer.invoke('getSystemVolume'),
 };
 
 if (process.contextIsolated) {

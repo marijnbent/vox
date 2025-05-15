@@ -50,6 +50,9 @@ declare global {
       getLogFilePath: () => Promise<string>;
       getLogLines: (lineCount?: number) => Promise<string[]>;
       playSystemSound: (soundName: string) => Promise<void>;
+      controlMusic: (action: 'playpause' | 'play' | 'pause') => Promise<void>;
+      setSystemVolume: (volume: number) => Promise<void>;
+      getSystemVolume: () => Promise<number | null>;
     }
   }
 }

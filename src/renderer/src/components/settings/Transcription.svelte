@@ -11,6 +11,10 @@
   const deepgramModel = writable<"nova-3" | "enhanced" | "whisper-large">(
     "nova-3",
   );
+  const musicManagementEnabled = writable(true);
+  const musicManagementAction = writable<"none" | "pause" | "lowerVolume">(
+    "pause",
+  );
 
   let isLoading = true;
 
@@ -36,6 +40,14 @@
       openaiModel.set(initialSettings.openaiModel || "gpt-4o-mini-transcribe");
       deepgramApiKey.set(initialSettings.deepgramApiKey || "");
       deepgramModel.set(initialSettings.deepgramModel || "nova-3");
+      musicManagementEnabled.set(
+        initialSettings.musicManagementEnabled === undefined
+          ? true // Default to true if not set
+          : initialSettings.musicManagementEnabled,
+      );
+      musicManagementAction.set(
+        initialSettings.musicManagementAction || "pause", // Default to pause if not set
+      );
     } catch (error) {
       window.api.log("error", "Failed to load transcription settings:", error);
     } finally {
@@ -54,6 +66,8 @@
       openaiModel: get(openaiModel),
       deepgramApiKey: get(deepgramApiKey),
       deepgramModel: get(deepgramModel),
+      musicManagementEnabled: get(musicManagementEnabled),
+      musicManagementAction: get(musicManagementAction),
     };
 
     saveTimeout = setTimeout(async () => {
@@ -76,6 +90,8 @@
     const currentModelValue = $openaiModel;
     const currentDeepgramApiKeyValue = $deepgramApiKey;
     const currentDeepgramModelValue = $deepgramModel;
+    const currentMusicManagementEnabled = $musicManagementEnabled;
+    const currentMusicManagementAction = $musicManagementAction;
 
     saveSettings();
   }
@@ -184,6 +200,32 @@
           </select>
           <label class="label" for="deepgram-model-select">
             <span class="label-text-alt">Select the Deepgram model to use.</span
+            >
+          </label>
+        </div>
+      {/if}
+
+      <!-- Music Management Settings -->
+      <div class="divider"></div>
+      <h3 class="text-lg font-medium">Music Management During Recording</h3>
+      {#if $musicManagementEnabled}
+        <div class="form-control">
+          <label class="label" for="music-action-select">
+            <span class="label-text">Action to take:</span>
+          </label>
+          <select
+            id="music-action-select"
+            class="select select-bordered w-full max-w-xs"
+            bind:value={$musicManagementAction}
+          >
+            <option value="pause">Pause Music</option>
+            <option value="lowerVolume">Lower Music Volume</option>
+            <option value="none">Do Nothing</option>
+          </select>
+          <label class="label" for="music-action-select">
+            <span class="label-text-alt"
+              >Choose how music playback should be affected when recording
+              starts.</span
             >
           </label>
         </div>

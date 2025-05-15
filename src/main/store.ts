@@ -10,6 +10,8 @@ interface TranscriptionSettings {
   openaiModel: 'gpt-4o-mini-transcribe' | 'gpt-4o-transcribe';
   deepgramApiKey: string;
   deepgramModel: 'nova-3' | 'enhanced' | 'whisper-large';
+  musicManagementEnabled?: boolean; // Optional for backwards compatibility
+  musicManagementAction?: 'none' | 'pause' | 'lowerVolume'; // Optional
 }
 
 interface EnhancementSettings {
@@ -80,7 +82,9 @@ const store = new Store<StoreSchema>({
       openaiApiKey: '',
       openaiModel: 'gpt-4o-mini-transcribe',
       deepgramApiKey: '',
-      deepgramModel: 'nova-3'
+      deepgramModel: 'nova-3',
+      musicManagementEnabled: true, // Default to true
+      musicManagementAction: 'pause' // Default to 'pause'
     },
     enhancements: {
       enabled: false,

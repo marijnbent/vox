@@ -12,8 +12,7 @@ import * as historyService from '../historyService';
 import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
 import { getFocusedInputTextWithCursor, type FocusedInputContext } from './macOSIntegration';
-import type { EnhancementPrompt, EnhancementSettings } from '../store';
-import type { HistoryRecord } from '../historyService';
+import type { EnhancementSettings } from '../store';
 
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
@@ -148,6 +147,9 @@ export function setupIpcHandlers(): void {
     ipcMain.handle('requestMediaPermission', handleRequestMediaPermission);
     ipcMain.handle('openSettingsURL', handleOpenSettingsURL);
     ipcMain.handle('getFocusedInputFieldText', handleGetFocusedInputFieldText);
+    ipcMain.handle('controlMusic', handleControlMusic);
+    ipcMain.handle('setSystemVolume', handleSetSystemVolume);
+    ipcMain.handle('getSystemVolume', handleGetSystemVolume);
 
     ipcMain.handle('getHistory', (_, page?: number, pageSize?: number) => {
         logger.info(`IPC: Received request for history page ${page || 1}`);
@@ -324,5 +326,88 @@ export function updateIpcHandlerStatus(status: typeof mainProcessRecordingStatus
 async function handleGetFocusedInputFieldText(): Promise<FocusedInputContext | null> {
     logger.debug('IPC: Received request for getFocusedInputFieldText, calling macOSIntegration module.');
     return getFocusedInputTextWithCursor();
+}
+
+async function executeAppleScript(script: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        exec(`osascript -e '${script}'`, (error, stdout, stderr) => {
+            if (error) {
+                logger.error(`AppleScript execution error: ${error.message} Stderr: ${stderr}`);
+                reject(error);
+                return;
+            }
+            if (stderr) {
+                logger.warn(`AppleScript execution stderr: ${stderr}`);
+            }
+            resolve(stdout.trim());
+        });
+    });
+}
+
+async function handleControlMusic(_event: Electron.IpcMainInvokeEvent, action: 'playpause' | 'play' | 'pause'): Promise<void> {
+    if (process.platform !== 'darwin') {
+        logger.warn('Music control is only available on macOS.');
+        return;
+    }
+    logger.info(`IPC: handleControlMusic received action: ${action}`);
+    const scripts = [
+        `tell application "Spotify" to ${action}`,
+        `tell application "Music" to ${action}`,
+    ];
+
+    for (const script of scripts) {
+        try {
+            await executeAppleScript(script);
+            logger.info(`Successfully executed AppleScript for music control: ${script}`);
+            return;
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.debug(`Failed to control music with script "${script}", trying next. Error: ${errorMessage}`);
+        }
+    }
+    logger.warn(`Could not control music; no target application (Spotify, Music) responded to action: ${action}.`);
+}
+
+
+async function handleSetSystemVolume(_event: Electron.IpcMainInvokeEvent, volume: number): Promise<void> {
+    if (process.platform !== 'darwin') {
+        logger.warn('Setting system volume is only available on macOS.');
+        return;
+    }
+    if (typeof volume !== 'number' || volume < 0 || volume > 100) {
+        logger.error(`IPC: Invalid volume level: ${volume}. Must be between 0 and 100.`);
+        throw new Error('Invalid volume level. Must be between 0 and 100.');
+    }
+    logger.info(`IPC: handleSetSystemVolume received volume: ${volume}`);
+    const script = `set volume output volume ${volume}`;
+    try {
+        await executeAppleScript(script);
+        logger.info(`System volume set to ${volume}`);
+    } catch (error) {
+        logger.error(`Failed to set system volume to ${volume}:`, error);
+        throw error; // Re-throw to inform the renderer
+    }
+}
+
+async function handleGetSystemVolume(): Promise<number | null> {
+    if (process.platform !== 'darwin') {
+        logger.warn('Getting system volume is only available on macOS.');
+        return null;
+    }
+    logger.info('IPC: handleGetSystemVolume received request.');
+    const script = `output volume of (get volume settings)`;
+    try {
+        const result = await executeAppleScript(script);
+        const volume = parseInt(result, 10);
+        if (isNaN(volume)) {
+            logger.error(`Could not parse system volume from AppleScript result: "${result}"`);
+            return null;
+        }
+        logger.info(`Current system volume retrieved: ${volume}`);
+        return volume;
+    } catch (error) {
+        logger.error('Failed to get system volume:', error);
+        return null;
+    }
 }
 

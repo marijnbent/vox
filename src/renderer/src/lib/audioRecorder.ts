@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { manageMusicOnRecordStart, restoreMusicAfterRecordStop } from './mediaManager';
 
 export const recordingStatus = writable<'idle' | 'recording' | 'processing' | 'error'>('idle');
 export const transcriptionResult = writable<string | null>(null);
@@ -64,6 +65,9 @@ export function initializeAudioRecorder(): () => void {
         audioContext = null;
     }
     cancelRequested = false;
+    // Ensure music is restored if cleanup is called during an active managed session
+    // However, primary restoration points are more specific to stop/cancel events.
+    // restoreMusicAfterRecordStop(); // Decided against a generic call here to avoid unintended restorations.
   };
 }
 
@@ -83,12 +87,20 @@ async function startRecording(): Promise<void> {
   }
 
   let obtainedStream: MediaStream | null = null;
+  let musicManaged = false;
 
   try {
+    const transcriptionSettings = await window.api.getStoreValue("transcription") as any || {};
+    if (transcriptionSettings.musicManagementEnabled && transcriptionSettings.musicManagementAction) {
+      await manageMusicOnRecordStart(transcriptionSettings.musicManagementAction);
+      musicManaged = true;
+    }
+
     obtainedStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (cancelRequested) {
         window.api.log('warn', 'Recording cancelled after getUserMedia was granted. Cleaning up stream.');
         obtainedStream?.getTracks().forEach(track => track.stop());
+        if (musicManaged) await restoreMusicAfterRecordStop();
         return;
     }
     audioStream = obtainedStream;
@@ -101,6 +113,7 @@ async function startRecording(): Promise<void> {
         window.api.log('warn', 'Recording cancelled before creating MediaRecorder.');
         audioStream?.getTracks().forEach(track => track.stop());
         audioStream = null;
+        if (musicManaged) await restoreMusicAfterRecordStop();
         return;
     }
 
@@ -124,17 +137,18 @@ async function startRecording(): Promise<void> {
 
       if (cancelRequested) {
           window.api.log('info', 'Recording cancelled (detected in onstop), discarding audio data.');
-          // Cancel sound is primarily played on IPC trigger. Not playing here to avoid duplicates.
           cleanupAfterRecording(true);
           return;
       }
 
-      // If not cancelled, it's a normal stop. Play stop sound.
+      // If not cancelled, it's a normal stop.
+      await restoreMusicAfterRecordStop(); // Restore music before playing sound
       window.api.playSystemSound(SOUND_STOP).catch(err => window.api.log('warn', `Failed to play stop sound: ${err}`));
+
 
       if (audioChunks.length === 0) {
           window.api.log('warn', 'No audio data recorded (or cleared due to cancel).');
-          cleanupAfterRecording(false);
+          cleanupAfterRecording(false); 
           return;
       }
 
@@ -225,6 +239,9 @@ async function startRecording(): Promise<void> {
 
   } catch (err) {
      window.api.log('error', 'Error accessing microphone or starting recorder:', err);
+     if (musicManaged) {
+        await restoreMusicAfterRecordStop().catch(e => window.api.log('warn', 'Error restoring music in startRecording catch:', e));
+     }
      let errorMessage = 'Unknown error';
      if (err instanceof Error) {
          errorMessage = err.message;
@@ -245,8 +262,13 @@ async function startRecording(): Promise<void> {
   }
 }
 
-function cleanupAfterRecording(isCancellationOrSilence: boolean): void {
+async function cleanupAfterRecording(isCancellationOrSilence: boolean): Promise<void> {
     window.api.log('debug', `Cleaning up audio resources (Is Cancellation/Silence: ${isCancellationOrSilence})`);
+    
+    // Always attempt to restore music state during cleanup, especially for cancellations.
+    // The mediaManager's internal state (originalMusicState) prevents issues if already restored.
+    await restoreMusicAfterRecordStop().catch(e => window.api.log('warn', 'Error restoring music in cleanupAfterRecording:', e));
+
     audioStream?.getTracks().forEach(track => {
         try { track.stop(); } catch(e) { window.api.log('warn', 'Error stopping track in cleanup:', e); }
     });
@@ -256,28 +278,29 @@ function cleanupAfterRecording(isCancellationOrSilence: boolean): void {
     window.api.log('debug', `Cleanup done, cancelRequested flag state preserved: ${cancelRequested}`);
 }
 
-export function stopRecording(): void {
+export async function stopRecording(): Promise<void> {
   window.api.log('info', `Stop recording requested. Current state: ${mediaRecorder?.state}. Cancelled: ${cancelRequested}`);
   if (cancelRequested) {
       window.api.log('warn', 'Stop ignored because cancelRequested is true.');
-      cleanupAfterRecording(true);
+      await cleanupAfterRecording(true);
       return;
   }
   const recorder = mediaRecorder;
   if (recorder && recorder.state === 'recording') {
     try {
+        // restoreMusicAfterRecordStop() will be called in recorder.onstop for normal stops
         recorder.stop();
     } catch (e) {
         window.api.log('error', 'Error calling MediaRecorder.stop():', e);
         handleTranscriptionError(`Failed to stop recorder: ${e instanceof Error ? e.message : String(e)}`);
-        cleanupAfterRecording(false);
+        await cleanupAfterRecording(false);
     }
   } else if (recorder && recorder.state === 'inactive') {
       window.api.log('warn', 'Stop requested but recorder is already inactive. Cleaning up.');
-      cleanupAfterRecording(false);
+      await cleanupAfterRecording(false);
   } else {
      window.api.log('warn', `Stop requested but no active/inactive recorder found or state is ${recorder?.state}.`);
-     cleanupAfterRecording(false);
+     await cleanupAfterRecording(false);
   }
 }
 
