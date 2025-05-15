@@ -49,6 +49,11 @@
   const customPrompts = writable<StoreEnhancementPrompt[]>([]); // Stores only custom prompts
   const systemPromptCache = writable<Record<string, SystemPrompt>>({}); // Cache for default prompt details
 
+  // State for the PromptModal
+  let showPromptModal = false;
+  let modalMode: "view" | "edit" | "add" = "add";
+  let currentPrompt: DisplayablePrompt | null = null;
+
   // Create a new derived store for all prompts, suitable for Multiselect and general listing
   const allPrompts = derived(
     [customPrompts, systemPromptCache],
