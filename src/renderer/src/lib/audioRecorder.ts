@@ -91,7 +91,7 @@ async function startRecording(): Promise<void> {
   try {
     const transcriptionSettings = await window.api.getStoreValue("transcription") as any || {};
     if (transcriptionSettings.musicManagementEnabled && transcriptionSettings.musicManagementAction) {
-      await manageMusicOnRecordStart(transcriptionSettings.musicManagementAction);
+      manageMusicOnRecordStart(transcriptionSettings.musicManagementAction);
       musicManaged = true;
     }
 
@@ -102,6 +102,7 @@ async function startRecording(): Promise<void> {
         if (musicManaged) await restoreMusicAfterRecordStop();
         return;
     }
+    
     audioStream = obtainedStream;
     window.api.log('info', 'Microphone access granted.');
 
