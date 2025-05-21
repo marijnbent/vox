@@ -61,12 +61,12 @@ app.whenReady().then(async () => {
         processingCancelledByEscape = true;
     };
 
-    const getProcessingCancelledFlag = (): boolean => {
-        return processingCancelledByEscape;
-    };
-
     const setProcessingCancelledFlag = (value: boolean): void => {
         processingCancelledByEscape = value;
+    };
+
+    const getProcessingCancelledFlag = (): boolean => {
+        return processingCancelledByEscape;
     };
 
     ShortcutManager.initializeShortcutManager({
@@ -81,8 +81,8 @@ app.whenReady().then(async () => {
     IpcHandlers.initializeIpcHandlers({
         transcriptionManager,
         enhancementManager,
-        getProcessingCancelledFlag,
         setProcessingCancelledFlag,
+        getProcessingCancelledFlag, // Added getter
         sendRecordingStatus,
     });
 

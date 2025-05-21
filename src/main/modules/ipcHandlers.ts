@@ -1,5 +1,4 @@
-import Mustache from 'mustache';
-import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron'; // Added app
+import { ipcMain, systemPreferences, shell, clipboard, app } from 'electron';
 import { exec } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path'; // Added path
@@ -7,7 +6,7 @@ import log from 'electron-log';
 import store from '../store';
 import { logger } from '../logger';
 import { TranscriptionManager } from '../transcription/TranscriptionManager';
-import { EnhancementManager } from '../enhancement/EnhancementManager'; // Removed getDefaultPromptTemplate
+import { EnhancementManager } from '../enhancement/EnhancementManager';
 import * as historyService from '../historyService';
 import { startKeyMonitor } from './shortcutManager';
 import { getMainWindow, sendToMain, sendToWidget } from './windowManager';
@@ -17,7 +16,6 @@ import type { EnhancementSettings } from '../store';
 let transcriptionManager: TranscriptionManager;
 let enhancementManager: EnhancementManager;
 
-// Default prompt definitions
 const DEFAULT_PROMPTS_CONFIG: Record<string, { name: string; filePath: string; temperature: number; fallbackTemplate: string }> = {
     "default_clean_transcription": {
         name: "🧽 Clean Transcription",
@@ -36,20 +34,20 @@ const DEFAULT_PROMPTS_CONFIG: Record<string, { name: string; filePath: string; t
 export function initializeIpcHandlers(dependencies: {
     transcriptionManager: TranscriptionManager;
     enhancementManager: EnhancementManager;
-    getProcessingCancelledFlag: () => boolean;
     setProcessingCancelledFlag: (value: boolean) => void;
+    getProcessingCancelledFlag: () => boolean; // Added getter
     sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void;
 }): void {
     transcriptionManager = dependencies.transcriptionManager;
     enhancementManager = dependencies.enhancementManager;
-    _getProcessingCancelledFlag = dependencies.getProcessingCancelledFlag;
     _setProcessingCancelledFlag = dependencies.setProcessingCancelledFlag;
+    _getProcessingCancelledFlag = dependencies.getProcessingCancelledFlag; // Added getter
     _sendRecordingStatus = dependencies.sendRecordingStatus;
     logger.info('IPC Handlers initialized with dependencies.');
 }
 
-let _getProcessingCancelledFlag: () => boolean = () => false;
 let _setProcessingCancelledFlag: (value: boolean) => void = () => {};
+let _getProcessingCancelledFlag: () => boolean = () => false; // Added getter
 let _sendRecordingStatus: (status: 'idle' | 'recording' | 'processing' | 'error') => void = () => {};
 
 // New transcription handler with enhancement and history details
@@ -60,6 +58,11 @@ async function handleTranscribeAudio(
   _setProcessingCancelledFlag(false);
   _sendRecordingStatus('processing');
   try {
+    if (_getProcessingCancelledFlag()) { // Use getter
+      logger.info('Processing cancelled by escape key.');
+      _sendRecordingStatus('idle');
+      return;
+    }
     if (!transcriptionManager) throw new Error('TranscriptionManager not initialized.');
     const mainWindow = getMainWindow();
     if (!mainWindow) throw new Error('Main window not available.');
@@ -385,7 +388,7 @@ async function handleSetSystemVolume(_event: Electron.IpcMainInvokeEvent, volume
         logger.info(`System volume set to ${volume}`);
     } catch (error) {
         logger.error(`Failed to set system volume to ${volume}:`, error);
-        throw error; // Re-throw to inform the renderer
+        throw error;
     }
 }
 

@@ -1,11 +1,11 @@
 import { systemPreferences, app } from 'electron';
 import { execFile } from 'child_process';
 import path from 'path';
-import { logger } from '../logger'; // Assuming logger is correctly set up
+import { logger } from '../logger';
 
 export interface FocusedInputContext {
     text: string;
-    selectedRange?: { start: number; length: number }; // start is 0-indexed
+    selectedRange?: { start: number; length: number };
 }
 
 // Interface for the raw JSON output from the Swift helper
@@ -34,13 +34,12 @@ function getSwiftHelperPath(): string {
  *
  * @returns A Promise that resolves to a string with `[]` marking the cursor position, or null otherwise.
  */
-export async function getFocusedInputTextWithCursor(): Promise<string | null> {
+export async function getFocusedInputTextWithCursor(): Promise<FocusedInputContext | null> {
     if (process.platform !== 'darwin') {
         logger.warn('[macOSIntegration] getFocusedInputTextWithCursor is only available on macOS.');
         return null;
     }
 
-    // Check for accessibility permissions without prompting
     const hasAccessibility = systemPreferences.isTrustedAccessibilityClient(false);
     if (!hasAccessibility) {
         logger.warn(
@@ -69,7 +68,6 @@ export async function getFocusedInputTextWithCursor(): Promise<string | null> {
 
             const stderrOutput = stderr.toString().trim();
             if (stderrOutput) {
-                // Log stderr as it might contain non-fatal accessibility warnings from Swift
                 logger.warn('[macOSIntegration] Swift helper stderr output:', stderrOutput);
             }
 
@@ -86,7 +84,7 @@ export async function getFocusedInputTextWithCursor(): Promise<string | null> {
             } catch (parseError: any) {
                 logger.error('[macOSIntegration] Error parsing JSON from Swift helper:', {
                     errorMessage: parseError.message,
-                    stdout: stdoutOutput.substring(0, 200) // Log a snippet of the problematic stdout
+                    stdout: stdoutOutput.substring(0, 200)
                 });
                 resolve(null);
                 return;
@@ -99,18 +97,15 @@ export async function getFocusedInputTextWithCursor(): Promise<string | null> {
             }
             
             let text = parsedOutput.text;
-            // As per prompt: If result.text is undefined but selection is valid, default to an empty string.
-            // Note: The Swift script is designed to already do this, so `text` should ideally be a string.
             if (text === undefined && 
                 typeof parsedOutput.selectionStart === 'number' && 
                 typeof parsedOutput.selectionLength === 'number') {
                 text = "";
             }
 
-            // If text is still not a string, it's an unexpected state or no actual text data.
             if (typeof text !== 'string') {
                  logger.warn('[macOSIntegration] Parsed text from Swift helper is not a string or is undefined, despite no error field.', { parsedOutput });
-                 resolve(null); // Or handle as "no text found" if appropriate
+                 resolve(null);
                  return;
             }
 
@@ -135,13 +130,12 @@ export async function getFocusedInputTextWithCursor(): Promise<string | null> {
                 );
             }
 
-            // Transform into a single string with cursor brackets
             const raw = context.text;
             const startPos = context.selectedRange?.start ?? raw.length;
             const selLen = context.selectedRange?.length ?? 0;
             const textWithCursor = raw.slice(0, startPos) + "[[cursor]]" + raw.slice(startPos + selLen);
 
-            resolve(textWithCursor);
+            resolve({ text: textWithCursor });
         });
     });
 }

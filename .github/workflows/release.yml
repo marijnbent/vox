@@ -23,8 +23,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build dist
-        run: npm run build
+      - name: Get App Version
+        id: package_version
+        run: echo "APP_VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
+
+      - name: Compile Swift Scripts
+        run: |
+          swiftc resources/key-monitor.swift -o resources/key-monitor -framework CoreGraphics -framework AppKit
+          swiftc resources/focused_input_helper.swift -o resources/focused_input_helper -framework AppKit -framework Accessibility
+
+      - name: Build macOS App
+        run: npm run build:mac
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
@@ -32,4 +41,4 @@ jobs:
           tag: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           bodyFile: CHANGELOG.md
-          artifacts: logseq-transcriber-${{ github.ref_name }}.zip
+          artifacts: dist/vox-${{ env.APP_VERSION }}.dmg
