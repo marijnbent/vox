@@ -17,7 +17,8 @@
 
 <div class="flex min-h-screen">
   <aside class="bg-purple-50 w-64 h-screen flex flex-col sticky top-0">
-    <div class="px-4 py-6">
+    <div class="py-4" style="-webkit-app-region: drag"></div>
+    <div class="px-4 py-4">
       <h1 class="text-2xl font-bold">🎤✨</h1>
     </div>
 
@@ -48,6 +49,7 @@
   </aside>
 
   <main class="flex-1 overflow-y-auto">
+    <div class="py-4" style="-webkit-app-region: drag"></div>
     <div class="p-4 md:p-6">
       <slot />
     </div>

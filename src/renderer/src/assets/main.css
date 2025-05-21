@@ -16,7 +16,7 @@ textarea,
 @plugin "daisyui/theme" {
   name: "pastel";
   default: true;
-  prefersdark: false;
+  prefersdark: true;
   color-scheme: "light";
   --color-base-100: oklch(100% 0 0);
   --color-base-200: oklch(98.462% 0.001 247.838);
@@ -47,7 +47,6 @@ textarea,
   --depth: 0;
   --noise: 0;
 }
-
 
 :root[data-theme="pastel"] {
   background-color: transparent;

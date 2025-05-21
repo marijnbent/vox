@@ -20,6 +20,8 @@ export function createMainWindow(): BrowserWindow {
         height: 670,
         show: false,
         autoHideMenuBar: true,
+        titleBarStyle: 'hiddenInset',
+        title: 'Vox',
         webPreferences: {
             preload: join(app.getAppPath(), './out/preload/index.js'),
             sandbox: false,
