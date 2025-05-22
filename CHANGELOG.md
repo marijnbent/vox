@@ -1,9 +1,7 @@
 ## Changelog
 Initial app.
 
-## Installation Instructions (macOS)
-
-Thank you for downloading **Vox**!
+## Installation Instructions
 
 Because this app is open-source and not distributed through the Mac App Store or signed with an Apple Developer ID (to avoid subscription fees), macOS Gatekeeper may show some warnings when you first try to open it. Here's how to install and run **Vox**:
 
