@@ -39,6 +39,7 @@ mac:
     - NSScreenCaptureUsageDescription: This app requires screen capture access for potential future contextual transcription features.
     - NSAccessibilityUsageDescription: This app requires Accessibility access to enable global keyboard shortcuts.
   notarize: false
+
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
