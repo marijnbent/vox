@@ -10,6 +10,15 @@ let cancelRequested = false;
 let audioChunks: Blob[] = [];
 let audioStream: MediaStream | null = null;
 let audioContext: AudioContext | null = null;
+let musicManaged = false; // Added to track music state
+
+// Define an interface for transcription settings for type safety
+interface TranscriptionSettings {
+  musicManagementEnabled?: boolean;
+  musicManagementAction?: 'pause' | 'playpause'; // Adjust based on actual possible values
+  musicManagementResumeOnStop?: boolean;
+  // Add other relevant properties from your settings structure
+}
 
 const SOUND_START = 'Tink';
 const SOUND_STOP = 'Submarine';
@@ -31,14 +40,9 @@ export function initializeAudioRecorder(): () => void {
       window.api.log('info', 'Cancel recording requested (IPC). Setting flag, playing sound, and forcing cleanup.');
       window.api.playSystemSound(SOUND_CANCEL).catch(err => window.api.log('warn', `Failed to play cancel sound (IPC): ${err}`));
       cancelRequested = true;
-      const recorderToStop = mediaRecorder;
-      const streamToStop = audioStream;
       mediaRecorder = null;
       audioStream = null;
       audioChunks = [];
-      streamToStop?.getTracks().forEach(track => {
-          try { track.stop(); } catch (e) { window.api.log('warn', 'Error stopping audio track during cancel:', e); }
-      });
       window.api.log('debug', 'Skipping mediaRecorder.stop() during forced cancel.');
   });
   const cleanupResult = window.api.onTranscriptionResult(handleTranscriptionResult);
@@ -64,9 +68,6 @@ export function initializeAudioRecorder(): () => void {
         audioContext = null;
     }
     cancelRequested = false;
-    // Ensure music is restored if cleanup is called during an active managed session
-    // However, primary restoration points are more specific to stop/cancel events.
-    // restoreMusicAfterRecordStop(); // Decided against a generic call here to avoid unintended restorations.
   };
 }
 
@@ -75,65 +76,115 @@ async function startRecording(): Promise<void> {
   cancelRequested = false;
   transcriptionResult.set(null);
   transcriptionError.set(null);
+  // Do not set recordingStatus to 'recording' yet.
 
-  if (mediaRecorder) {
-    window.api.log('warn', `Start request ignored. Recorder instance already exists (state: ${mediaRecorder?.state}).`);
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    window.api.log('warn', 'MediaRecorder already active. State:', mediaRecorder.state);
     return;
-  }
-  if (cancelRequested) {
-     window.api.log('warn', 'Start request ignored. Cancel flag already set.');
-     return;
   }
 
   let obtainedStream: MediaStream | null = null;
-  let musicManaged = false;
+  // musicManaged is now a module-level variable
 
   try {
-    const transcriptionSettings = await window.api.getStoreValue("transcription") as any || {};
+    // 1. Explicitly check and request microphone permission
+    let micPermissionStatus = await window.api.getMediaPermissionStatus('microphone');
+    window.api.log('info', `Initial microphone permission status: ${micPermissionStatus}`);
+
+    if (micPermissionStatus === 'not-determined') {
+      window.api.log('info', 'Microphone permission not determined, requesting...');
+      const permissionGranted = await window.api.requestMediaPermission('microphone');
+      if (!permissionGranted) {
+        window.api.log('warn', 'Microphone permission denied by user or system during request.');
+        handleTranscriptionError('Microphone permission was not granted. Please grant access in System Settings.');
+        return;
+      }
+      // Re-check status after request
+      micPermissionStatus = await window.api.getMediaPermissionStatus('microphone');
+      window.api.log('info', `Microphone permission status after request: ${micPermissionStatus}`);
+    }
+
+    if (micPermissionStatus === 'denied' || micPermissionStatus === 'restricted') {
+      window.api.log('warn', `Microphone permission is ${micPermissionStatus}.`);
+      handleTranscriptionError(`Microphone access is ${micPermissionStatus}. Please grant access in System Settings or via the app's Permissions page.`);
+      return;
+    } else if (micPermissionStatus !== 'granted') {
+      window.api.log('warn', `Microphone permission status is unexpected or unavailable: ${micPermissionStatus}.`);
+      handleTranscriptionError(`Microphone access is unavailable (status: ${micPermissionStatus}). Please check system settings.`);
+      return;
+    }
+
+    window.api.log('info', 'Microphone permission is granted.');
+
+    // 2. Manage Music (if enabled)
+    const transcriptionSettings = await window.api.getStoreValue("transcription") as TranscriptionSettings || {};
     if (transcriptionSettings.musicManagementEnabled && transcriptionSettings.musicManagementAction) {
-      manageMusicOnRecordStart(transcriptionSettings.musicManagementAction);
+      window.api.log('info', `Music management: Attempting to ${transcriptionSettings.musicManagementAction} music.`);
+      await window.api.controlMusic(transcriptionSettings.musicManagementAction === 'pause' ? 'pause' : 'playpause'); // Assuming 'playpause' for other actions
       musicManaged = true;
     }
 
-    obtainedStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // 3. Check for cancellation after permission/music management
     if (cancelRequested) {
-        window.api.log('warn', 'Recording cancelled after getUserMedia was granted. Cleaning up stream.');
-        obtainedStream?.getTracks().forEach(track => track.stop());
-        if (musicManaged) await restoreMusicAfterRecordStop();
-        return;
+      window.api.log('warn', 'Recording cancelled after permission grant/music management, before getUserMedia.');
+      await cleanupAfterRecording(true); // Pass true for cancellation
+      return;
     }
-    
+
+    // Set status to 'recording' now that permissions are confirmed and we are proceeding
+    recordingStatus.set('recording');
+    window.api.updateRecordingStatus('recording'); // Inform main process
+    window.api.notifyRecorderStarted(); // Notify main process recorder has started (or is attempting to)
+
+    // 4. GetUserMedia
+    window.api.log('info', 'Attempting to get user media (microphone).');
+    obtainedStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    window.api.log('info', 'Successfully obtained media stream.');
+
+
+    if (cancelRequested) {
+      window.api.log('warn', 'Recording cancelled after getUserMedia was granted. Cleaning up stream.');
+      obtainedStream?.getTracks().forEach((track) => track.stop());
+      await cleanupAfterRecording(true);
+      return;
+    }
     audioStream = obtainedStream;
-    window.api.log('info', 'Microphone access granted.');
+    window.api.log("info", "Microphone access granted and stream obtained."); // Moved this log
 
     const options = getSupportedMimeTypeAndOptions();
-    window.api.log('info', `Using MediaRecorder options: ${JSON.stringify(options)}`);
+    window.api.log("info", `Using MediaRecorder options: ${JSON.stringify(options)}`);
 
     if (cancelRequested) {
-        window.api.log('warn', 'Recording cancelled before creating MediaRecorder.');
-        audioStream?.getTracks().forEach(track => track.stop());
-        audioStream = null;
-        if (musicManaged) await restoreMusicAfterRecordStop();
-        return;
+      window.api.log('warn', 'Recording cancelled before creating MediaRecorder.');
+      audioStream?.getTracks().forEach((track) => track.stop());
+      audioStream = null;
+      await cleanupAfterRecording(true);
+      return;
     }
 
     const localRecorder = new MediaRecorder(audioStream, options);
     mediaRecorder = localRecorder;
     audioChunks = [];
 
-    localRecorder.ondataavailable = (event) => {
+    localRecorder.ondataavailable = (event2) => {
       if (cancelRequested) {
           return;
       }
-      if (event.data.size > 0) {
-        audioChunks.push(event.data);
+      if (event2.data.size > 0) {
+        audioChunks.push(event2.data);
       }
     };
 
     localRecorder.onstop = async () => {
-      const currentRecorderRef = mediaRecorder;
-      const currentMimeType = currentRecorderRef?.mimeType || options.mimeType || 'audio/webm';
-      window.api.log('info', `MediaRecorder stopped. Cancelled flag: ${cancelRequested}`);
+      const currentMimeType = mediaRecorder?.mimeType || options.mimeType || "audio/webm";
+      
+      // Prevent processing if it was a deliberate cancellation that already cleaned up
+      if (cancelRequested && get(recordingStatus) === 'idle') {
+          window.api.log('info', 'Recorder stopped due to cancellation, processing skipped.');
+          return;
+      }
+
+      window.api.log('info', `MediaRecorder stopped. MimeType: ${currentMimeType}, Chunks: ${audioChunks.length}`);
 
       if (cancelRequested) {
           window.api.log('info', 'Recording cancelled (detected in onstop), discarding audio data.');
@@ -221,38 +272,66 @@ async function startRecording(): Promise<void> {
     }
 
     try {
-        localRecorder.start();
-        window.api.playSystemSound(SOUND_START).catch(err => window.api.log('warn', `Failed to play start sound: ${err}`));
-        window.api.log('info', `MediaRecorder started (Bitrate: ${localRecorder.audioBitsPerSecond || 'default'}, MimeType: ${localRecorder.mimeType}).`);
-        window.api.notifyRecorderStarted();
+      // Play start sound only after all checks and just before actual recording starts
+      await window.api.playSystemSound(SOUND_START);
+      localRecorder.start();
+      window.api.log('info', 'MediaRecorder started.');
     } catch (startError) {
-         window.api.log('error', 'Error calling MediaRecorder.start():', startError);
-         handleTranscriptionError(`Failed to start recorder: ${startError.message}`);
-         cleanupAfterRecording(false);
+      window.api.log('error', 'Error starting MediaRecorder:', startError);
+      handleTranscriptionError('Failed to start the audio recorder.');
+      // Ensure cleanup if recorder.start() fails
+      if (audioStream) {
+        audioStream.getTracks().forEach(track => track.stop());
+        audioStream = null;
+      }
+      mediaRecorder = null; // Ensure mediaRecorder is nulled
+      await cleanupAfterRecording(true); // Treat as a cancellation/error
+      return; // Exit startRecording
+    }
+  } catch (err) {
+    window.api.log("error", "Error accessing microphone or starting recorder:", err);
+    // Music managed flag should be handled here as well
+    if (musicManaged) {
+      const transcriptionSettings = await window.api.getStoreValue("transcription") as TranscriptionSettings || {};
+      if (transcriptionSettings.musicManagementResumeOnStop) { // Or always resume on error
+        window.api.log('info', 'Attempting to resume music playback due to error.');
+        await window.api.controlMusic('play');
+      }
+      musicManaged = false; // Reset flag
     }
 
-  } catch (err) {
-     window.api.log('error', 'Error accessing microphone or starting recorder:', err);
-     if (musicManaged) {
-        await restoreMusicAfterRecordStop().catch(e => window.api.log('warn', 'Error restoring music in startRecording catch:', e));
-     }
-     let errorMessage = 'Unknown error';
-     if (err instanceof Error) {
-         errorMessage = err.message;
-         if (err.name === 'NotAllowedError') {
-             errorMessage = 'Microphone permission denied.';
-         } else if (err.name === 'NotFoundError') {
-             errorMessage = 'No microphone found.';
-         } else if (err.name === 'NotReadableError') {
-             errorMessage = 'Microphone is already in use or hardware error.';
-         }
-     }
-     handleTranscriptionError(`Microphone access error: ${errorMessage}`);
-     if (obtainedStream) {
-        obtainedStream.getTracks().forEach(track => track.stop());
-     }
-     audioStream = null;
-     mediaRecorder = null;
+    let errorMessage = "Unknown error during recording setup.";
+    if (err instanceof Error) {
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        errorMessage = 'Microphone permission was denied.';
+        // This should ideally be caught by the explicit permission check now,
+        // but kept as a fallback.
+        handleTranscriptionError(errorMessage + ' Please grant access in System Settings.');
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        errorMessage = 'No microphone found. Please ensure a microphone is connected and enabled.';
+        handleTranscriptionError(errorMessage);
+      } else if (err.name === 'AbortError') {
+        errorMessage = 'Recording setup was aborted.'; // e.g. if another getUserMedia request interrupts
+        handleTranscriptionError(errorMessage);
+      } else {
+        errorMessage = err.message;
+        handleTranscriptionError(`Error during recording setup: ${errorMessage}`);
+      }
+    } else {
+       handleTranscriptionError(`An unknown error occurred during recording setup: ${String(err)}`);
+    }
+
+    if (obtainedStream) {
+      obtainedStream.getTracks().forEach((track) => track.stop());
+    }
+    if (audioStream && audioStream !== obtainedStream) { // If audioStream was assigned separately
+        audioStream.getTracks().forEach((track) => track.stop());
+    }
+    audioStream = null;
+    mediaRecorder = null;
+    // recordingStatus is set to 'error' by handleTranscriptionError
+    // Call cleanupAfterRecording to ensure consistent state reset on error
+    await cleanupAfterRecording(true); // Treat as cancellation/error
   }
 }
 
@@ -270,6 +349,18 @@ async function cleanupAfterRecording(isCancellationOrSilence: boolean): Promise<
     mediaRecorder = null;
     audioChunks = [];
     window.api.log('debug', `Cleanup done, cancelRequested flag state preserved: ${cancelRequested}`);
+
+    if (musicManaged) {
+        const transcriptionSettings = await window.api.getStoreValue("transcription") as TranscriptionSettings || {};
+        // Resume music if configured, or if it was a cancellation/error and music was playing
+        if (transcriptionSettings.musicManagementResumeOnStop || isCancellationOrSilence) {
+            window.api.log('info', 'Attempting to resume music playback after recording/cancellation.');
+            await window.api.controlMusic('play'); // Or 'playpause'
+        }
+        musicManaged = false; // Reset for next recording session
+    }
+    // This notification might be to signal the main process that the renderer is now idle/ready.
+    window.api.notifyRecorderStarted(); 
 }
 
 export async function stopRecording(): Promise<void> {
@@ -305,9 +396,13 @@ function handleTranscriptionResult(text: string): void {
 }
 
 function handleTranscriptionError(error: string): void {
-  window.api.log('error', `Transcription/Processing error received: ${error}`);
+  window.api.log('error', 'Transcription error:', error);
   transcriptionError.set(error);
-  transcriptionResult.set(null);
+  if (get(recordingStatus) !== 'error') {
+    recordingStatus.set('error');
+    window.api.updateRecordingStatus('error'); // Inform main process
+  }
+  window.api.playSystemSound(SOUND_CANCEL);
 }
 
 function handleRecordingStatus(status: 'idle' | 'recording' | 'processing' | 'error'): void {
