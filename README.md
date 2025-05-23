@@ -2,6 +2,14 @@
 
 Vox is an open-source Electron application designed for voice transcription. It allows users to record audio, transcribe it using services like Deepgram or OpenAI Whisper, and enhance the resulting text. The application is built with Svelte and TypeScript, and it integrates with the operating system for features like global shortcuts and a system tray icon for easy access.
 
+## Alternatives
+
+I started building this application when another open-source app didn't quite meet my needs, but it's still a very good application. If you prefer a native-built open-source transcriber app, I recommend checking out [VoiceInk](https://github.com/Beingpax/VoiceInk).
+
+There's another app I really like, [Spokenly](https://spokenly.app/). While it's not open-source and I miss some customizability, it's also worth a look.
+
+Both these applications support local models as well, which this one doesn't. 
+
 ## Installation Instructions
 
 Because this app is open-source and not distributed through the Mac App Store or signed with an Apple Developer ID (to avoid subscription fees), macOS Gatekeeper may show some warnings when you first try to open it. Here's how to install and run **Vox**:
